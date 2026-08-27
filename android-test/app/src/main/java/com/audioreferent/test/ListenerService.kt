@@ -30,7 +30,6 @@ class ListenerService : Service(), RecognitionListener {
     private var model: Model? = null
     private var speechService: SpeechService? = null
 
-    private val wakeWord = "вика"
     private val sampleRate = 16000.0f
     private val modelUrl = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
 
@@ -70,7 +69,7 @@ class ListenerService : Service(), RecognitionListener {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return Notification.Builder(this, channelId)
-            .setContentTitle("Audioreferent — слушаю «$wakeWord»")
+            .setContentTitle("Audioreferent — слушаю «${CommandRegistry.getWakeWord(this)}»")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
@@ -177,12 +176,13 @@ class ListenerService : Service(), RecognitionListener {
     private fun handleFinalUtterance(text: String) {
         if (text.isEmpty()) return
 
+        val wakeWord = CommandRegistry.getWakeWord(this)
         if (!text.lowercase().contains(wakeWord)) {
             updateNotification("Слушаю…")
             return
         }
 
-        val match = CommandRegistry.match(text)
+        val match = CommandRegistry.match(this, text)
         if (match == null) {
             updateNotification("Услышала «$wakeWord», но не поняла команду: «$text»")
             return
