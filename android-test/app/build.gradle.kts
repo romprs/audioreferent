@@ -14,16 +14,13 @@ android {
         versionCode = 1
         versionName = "0.1"
 
-        // Ограничиваем ABI, чтобы не тащить в APK нативные библиотеки Vosk
-        // под x86/x86_64 — тестовое устройство реальное, а не эмулятор.
+        // Модель не встроена в APK (см. MainActivity — качается при первом
+        // запуске), поэтому единственное, что раздувает размер файла — это
+        // нативные библиотеки Vosk. Ограничиваем одной ABI: тестовое
+        // устройство реальное (arm64), а не эмулятор x86.
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            abiFilters += listOf("arm64-v8a")
         }
-    }
-
-    androidResources {
-        // Модель Vosk лежит в assets несжатой — не даём AAPT пытаться её сжать
-        noCompress += listOf("mdl", "fst", "ext", "int", "mat", "ie", "dubm", "conf")
     }
 
     buildTypes {

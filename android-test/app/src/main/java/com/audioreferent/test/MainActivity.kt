@@ -4,6 +4,11 @@ package com.audioreferent.test
 // основном проекте audioreferent для РЭД ОС), встроенным прямо в APK.
 // Нужен, потому что на тестовом устройстве нет системного сервиса
 // android.speech.SpeechRecognizer — Vosk работает сам по себе, без него.
+//
+// Модель НЕ зашита в APK (это раздувало файл до 100+ МБ) — при первом
+// запуске приложение само скачивает её и распаковывает во внутреннее
+// хранилище. Интернет нужен только один раз, дальше распознавание полностью
+// офлайн, как и задумано для основного проекта.
 
 import android.Manifest
 import android.app.Activity
@@ -17,7 +22,11 @@ import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
-import org.vosk.android.StorageService
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileInputStream
+import java.net.URL
+import java.util.zip.ZipInputStream
 
 class MainActivity : Activity(), RecognitionListener {
 
@@ -32,6 +41,7 @@ class MainActivity : Activity(), RecognitionListener {
     private val wakeWord = "вика"
     private val micRequestCode = 100
     private val sampleRate = 16000.0f
+    private val modelUrl = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,22 +60,68 @@ class MainActivity : Activity(), RecognitionListener {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), micRequestCode)
         } else {
-            unpackModel()
+            ensureModel()
         }
     }
 
-    private fun unpackModel() {
-        statusText.text = "Распаковываю модель распознавания…"
-        StorageService.unpack(this, "model-ru", "model",
-            { unpackedModel ->
-                model = unpackedModel
-                statusText.text = "Готово. Нажмите «Старт» и произнесите: «Вика, открой браузер»"
-                startButton.isEnabled = true
-            },
-            { exception ->
-                statusText.text = "Не удалось распаковать модель: ${exception.message}"
+    private fun ensureModel() {
+        val modelDir = File(filesDir, "model-ru")
+        if (File(modelDir, "conf/model.conf").exists()) {
+            loadModel(modelDir)
+            return
+        }
+        statusText.text = "Скачиваю модель распознавания (~45 МБ, один раз)…"
+        Thread {
+            try {
+                downloadAndUnpackModel(modelDir)
+                runOnUiThread { loadModel(modelDir) }
+            } catch (e: Exception) {
+                runOnUiThread { statusText.text = "Не удалось скачать модель: ${e.message}" }
             }
-        )
+        }.start()
+    }
+
+    private fun downloadAndUnpackModel(targetDir: File) {
+        val tmpZip = File(cacheDir, "model.zip")
+        URL(modelUrl).openStream().use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        runOnUiThread { statusText.text = "Распаковываю модель…" }
+        val extractDir = File(cacheDir, "model-extract")
+        extractDir.deleteRecursively()
+        extractDir.mkdirs()
+        ZipInputStream(BufferedInputStream(FileInputStream(tmpZip))).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val outFile = File(extractDir, entry.name)
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    outFile.outputStream().use { zis.copyTo(it) }
+                }
+                entry = zis.nextEntry
+            }
+        }
+        tmpZip.delete()
+
+        // Архив распаковывается в подпапку вида vosk-model-small-ru-0.22
+        val unzippedModelDir = extractDir.listFiles()?.firstOrNull { it.isDirectory }
+            ?: throw IllegalStateException("Не найдена папка модели после распаковки")
+        targetDir.deleteRecursively()
+        unzippedModelDir.copyRecursively(targetDir, overwrite = true)
+        extractDir.deleteRecursively()
+    }
+
+    private fun loadModel(modelDir: File) {
+        try {
+            model = Model(modelDir.absolutePath)
+            statusText.text = "Готово. Нажмите «Старт» и произнесите: «Вика, открой браузер»"
+            startButton.isEnabled = true
+        } catch (e: Exception) {
+            statusText.text = "Не удалось загрузить модель: ${e.message}"
+        }
     }
 
     private fun startListening() {
@@ -146,7 +202,7 @@ class MainActivity : Activity(), RecognitionListener {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == micRequestCode) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-                unpackModel()
+                ensureModel()
             } else {
                 statusText.text = "Нет разрешения на использование микрофона"
             }
