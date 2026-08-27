@@ -1,0 +1,65 @@
+# Настройки голосового помощника audioreferent.
+# Пользовательский файл (~/.config/audioreferent/config.yaml) переопределяет
+# отдельные ключи поверх этого файла — не обязательно копировать всё целиком.
+
+# Активационное слово. Сравнение нечёткое (допускаются небольшие ошибки
+# распознавания), поэтому можно использовать обычные слова русского языка.
+wake_word: "вика"
+
+# Максимально допустимое расстояние Левенштейна между произнесённым словом
+# и wake_word, при котором активация всё ещё считается сработавшей.
+wake_word_fuzzy_threshold: 1
+
+# null = устройство ввода по умолчанию (см. `audioreferent list-devices`)
+input_device: null
+
+# null = используется переменная окружения VOSK_MODEL_PATH либо путь
+# /usr/share/vosk-model-small-ru
+model_path: null
+
+sample_rate: 16000
+
+# Сколько секунд после активационного слова ждать команду
+command_timeout_seconds: 6
+
+feedback:
+  # Короткий звуковой сигнал при активации/распознавании команды
+  sound: true
+  # Голосовой ответ через espeak-ng (если установлен)
+  speech: false
+
+commands:
+  - phrases: ["открой браузер", "запусти браузер"]
+    action: launch_app
+    args:
+      default_browser: true
+      candidates: ["firefox", "chromium", "chromium-browser", "google-chrome-stable", "google-chrome"]
+
+  - phrases: ["открой терминал", "запусти терминал"]
+    action: launch_app
+    args:
+      candidates: ["mate-terminal", "konsole", "gnome-terminal", "xfce4-terminal", "lxterminal", "xterm"]
+
+  - phrases: ["открой файловый менеджер", "открой проводник", "открой файлы"]
+    action: launch_app
+    args: {app: "xdg-open", target: "~"}
+
+  - phrases: ["сделай громче", "увеличь громкость", "громче"]
+    action: volume_change
+    args: {delta: 10}
+
+  - phrases: ["сделай тише", "уменьши громкость", "тише"]
+    action: volume_change
+    args: {delta: -10}
+
+  - phrases: ["выключи звук", "заглуши звук", "без звука"]
+    action: volume_mute
+    args: {mute: true}
+
+  - phrases: ["включи звук"]
+    action: volume_mute
+    args: {mute: false}
+
+  - phrases: ["заблокируй экран", "заблокируй компьютер"]
+    action: lock_screen
+    args: {}

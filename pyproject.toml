@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audioreferent"
+version = "0.1.0"
+description = "Голосовой помощник для RED OS с командами на русском языке"
+requires-python = ">=3.9"
+dependencies = [
+    "vosk>=0.3.45",
+    "sounddevice>=0.4.6",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+audioreferent = "audioreferent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+audioreferent = ["default_config.yaml"]

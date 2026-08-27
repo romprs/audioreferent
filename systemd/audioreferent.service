@@ -1,0 +1,12 @@
+[Unit]
+Description=Голосовой помощник audioreferent
+After=pulseaudio.service pipewire.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/audioreferent run
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
