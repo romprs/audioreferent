@@ -163,27 +163,51 @@ class MainActivity : Activity(), RecognitionListener {
         }
     }
 
-    private fun showText(text: String) {
+    // Финальный результат (граница фразы по паузе) — единственное место, где
+    // проверяем активационное слово и пытаемся выполнить команду. Партиалы
+    // используются только для отображения текста вживую, без действий —
+    // иначе одна и та же команда сработала бы по нескольку раз за фразу.
+    private fun handleFinalUtterance(text: String) {
         if (text.isEmpty()) return
         resultText.text = text
-        val wakeWordFound = text.lowercase().contains(wakeWord)
-        statusText.text = if (wakeWordFound) "Ключевое слово «$wakeWord» обнаружено!" else "Слушаю…"
-        statusText.setTextColor(if (wakeWordFound) Color.parseColor("#2e7d32") else Color.DKGRAY)
+
+        if (!text.lowercase().contains(wakeWord)) {
+            statusText.text = "Слушаю…"
+            statusText.setTextColor(Color.DKGRAY)
+            return
+        }
+
+        val match = CommandRegistry.match(text)
+        if (match == null) {
+            statusText.text = "Ключевое слово услышано, но команда не распознана"
+            statusText.setTextColor(Color.parseColor("#f9a825"))
+            return
+        }
+
+        statusText.text = "Выполняю: ${CommandRegistry.describe(match)}"
+        statusText.setTextColor(Color.parseColor("#2e7d32"))
+        try {
+            Actions.execute(this, match)
+        } catch (e: Exception) {
+            statusText.text = "Ошибка выполнения: ${e.message}"
+            statusText.setTextColor(Color.RED)
+        }
     }
 
     // Vosk слушает непрерывно: onResult приходит на каждой границе фразы
     // (по паузе), сервис не останавливается сам — это удобно для проверки
     // нескольких команд подряд без повторного нажатия "Старт".
     override fun onPartialResult(hypothesis: String?) {
-        showText(extractText(hypothesis, "partial"))
+        val text = extractText(hypothesis, "partial")
+        if (text.isNotEmpty()) resultText.text = text
     }
 
     override fun onResult(hypothesis: String?) {
-        showText(extractText(hypothesis, "text"))
+        handleFinalUtterance(extractText(hypothesis, "text"))
     }
 
     override fun onFinalResult(hypothesis: String?) {
-        showText(extractText(hypothesis, "text"))
+        handleFinalUtterance(extractText(hypothesis, "text"))
         listeningFinished()
     }
 
