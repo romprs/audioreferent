@@ -4,3 +4,6 @@ build/
 app/build/
 .idea/
 *.iml
+
+# Модель Vosk (~90MB распакованная) — скачивается скриптом, не хранится в git
+app/src/main/assets/model-ru/
