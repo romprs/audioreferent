@@ -51,6 +51,15 @@ class ListenerService : Service(), RecognitionListener {
         return START_STICKY
     }
 
+    // Штатное поведение Android — сервис НЕ должен останавливаться при
+    // закрытии/свайпе приложения из списка задач (см. android:stopWithTask
+    // в манифесте). Если производитель всё равно убивает процесс на этом
+    // этапе, дело не в этом коллбэке, а в агрессивном энергосбережении
+    // прошивки — см. подсказку в MainActivity про автозапуск/батарею.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {

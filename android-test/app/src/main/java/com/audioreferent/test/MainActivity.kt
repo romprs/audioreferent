@@ -9,8 +9,11 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -100,7 +103,33 @@ class MainActivity : Activity() {
         } else {
             startService(intent)
         }
-        statusText.text = "Сервис запущен. Приложение можно закрыть — состояние смотрите в уведомлении."
+        requestIgnoreBatteryOptimizations()
+        statusText.text = "Сервис запущен. Приложение можно закрыть — состояние смотрите в уведомлении.\n\n" +
+            "Если после закрытия приложения оно перестаёт слушать — это, скорее всего, " +
+            "агрессивное энергосбережение прошивки (типично для Huawei/HarmonyOS-устройств), " +
+            "а не баг: откройте настройки телефона → Батарея/Приложения → найдите " +
+            "«Audioreferent Test» → отключите оптимизацию батареи и включите автозапуск/" +
+            "работу в фоне вручную."
+    }
+
+    // Стандартный Android-механизм для приложений, которым нужно продолжать
+    // работу в фоне (навигаторы, плееры, ассистенты). На агрессивных
+    // прошивках (Huawei/HarmonyOS) может не помочь полностью — там обычно
+    // есть ещё отдельный экран "Автозапуск"/"Защищённые приложения",
+    // который системным API не открывается, только вручную.
+    private fun requestIgnoreBatteryOptimizations() {
+        try {
+            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+        } catch (e: Exception) {
+            // Не критично: часть прошивок (в т.ч. компатибилити-слои не
+            // на базе AOSP) может не поддерживать этот экран вообще.
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
