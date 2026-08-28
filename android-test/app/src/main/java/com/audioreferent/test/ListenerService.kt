@@ -38,6 +38,9 @@ class ListenerService : Service(), RecognitionListener {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
+        ServiceState.setShouldRun(this, true)
+        ServiceWatchdog.scheduleNextCheck(this)
         createNotificationChannel()
         startForeground(notificationId, buildNotification("Запуск…"))
         ensureModel()
@@ -45,6 +48,8 @@ class ListenerService : Service(), RecognitionListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            ServiceState.setShouldRun(this, false)
+            ServiceWatchdog.cancel(this)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -228,6 +233,7 @@ class ListenerService : Service(), RecognitionListener {
     }
 
     override fun onDestroy() {
+        isRunning = false
         speechService?.stop()
         speechService?.shutdown()
         super.onDestroy()
@@ -235,5 +241,12 @@ class ListenerService : Service(), RecognitionListener {
 
     companion object {
         const val ACTION_STOP = "com.audioreferent.test.ACTION_STOP"
+
+        // Живёт только в рамках текущего процесса: если процесс убили,
+        // при следующем запуске (в т.ч. новым процессом ради watchdog-
+        // получателя) значение по умолчанию false — то есть "не запущен",
+        // и это ровно то, что нужно определить WatchdogReceiver.
+        @Volatile
+        var isRunning: Boolean = false
     }
 }

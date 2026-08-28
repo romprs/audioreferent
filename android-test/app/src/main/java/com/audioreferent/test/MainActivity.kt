@@ -52,6 +52,8 @@ class MainActivity : Activity() {
 
         startButton.setOnClickListener { requestPermissionsAndStart() }
         stopButton.setOnClickListener {
+            ServiceState.setShouldRun(this, false)
+            ServiceWatchdog.cancel(this)
             stopService(Intent(this, ListenerService::class.java))
             statusText.text = "Остановлено"
         }

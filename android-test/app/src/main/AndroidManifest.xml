@@ -25,5 +25,8 @@
             android:foregroundServiceType="microphone"
             android:stopWithTask="false"
             android:exported="false" />
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="false" />
     </application>
 </manifest>
