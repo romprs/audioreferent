@@ -1,7 +1,6 @@
 package com.audioreferent.test
 
-// Выполнение действий на самом устройстве Android — аналог actions.py
-// из основного проекта, только средствами Android SDK.
+// Выполнение действий на самом устройстве Android.
 
 import android.content.Context
 import android.content.Intent
@@ -12,39 +11,48 @@ class ActionError(message: String) : Exception(message)
 
 object Actions {
 
-    fun execute(context: Context, match: CommandMatch) {
+    // Для действий, открывающих что-то на экране (браузер/приложение),
+    // отдаём готовый Intent, а не запускаем его сами: реальный запуск и
+    // резервная кнопка на уведомлении оркестрируются в ListenerService.
+    // Так надо, потому что прямой startActivity() из фонового сервиса
+    // Android иногда молча блокирует (background activity launch
+    // restrictions — без исключения, просто ничего не происходит), и без
+    // запасного варианта команда время от времени просто ничего не делает.
+    fun buildActivityIntent(context: Context, match: CommandMatch): Intent? {
         val spec = match.spec
-        when (spec.action) {
-            ActionType.OPEN_BROWSER -> openUrl(context, "https://www.google.com", spec.browserPackage)
-            ActionType.OPEN_URL -> openUrl(context, spec.url ?: throw ActionError("В команде не указан url"), spec.browserPackage)
+        return when (spec.action) {
+            ActionType.OPEN_BROWSER -> viewIntent("https://www.google.com", spec.browserPackage)
+            ActionType.OPEN_URL -> viewIntent(
+                spec.url ?: throw ActionError("В команде не указан url"), spec.browserPackage
+            )
             ActionType.SEARCH -> {
                 if (match.remainder.isEmpty()) throw ActionError("Не расслышала, что искать")
-                val searchUrl = "https://www.google.com/search?q=" + Uri.encode(match.remainder)
-                openUrl(context, searchUrl, spec.browserPackage)
+                viewIntent("https://www.google.com/search?q=" + Uri.encode(match.remainder), spec.browserPackage)
             }
-            ActionType.LAUNCH_APP -> launchApp(context, spec.appPackage ?: throw ActionError("В команде не указан package"))
-            ActionType.VOLUME_CHANGE -> changeVolume(context, spec.arg)
-            ActionType.VOLUME_MUTE -> setMute(context, spec.arg != 0)
+            ActionType.LAUNCH_APP -> {
+                val pkg = spec.appPackage ?: throw ActionError("В команде не указан package")
+                context.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                } ?: throw ActionError("Приложение $pkg не установлено")
+            }
+            ActionType.VOLUME_CHANGE, ActionType.VOLUME_MUTE -> null
         }
     }
 
-    private fun openUrl(context: Context, url: String, browserPackage: String?) {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+    private fun viewIntent(url: String, browserPackage: String?): Intent =
+        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (!browserPackage.isNullOrEmpty()) setPackage(browserPackage)
         }
-        try {
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            throw ActionError("Не удалось открыть ссылку" + (browserPackage?.let { " в $it" } ?: "") + ": ${e.message}")
-        }
-    }
 
-    private fun launchApp(context: Context, packageName: String) {
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: throw ActionError("Приложение $packageName не установлено")
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+    // Громкость и mute не открывают Activity — фоновые ограничения на них
+    // не действуют, выполняются сразу и надёжно.
+    fun executeNonActivity(context: Context, match: CommandMatch) {
+        when (match.spec.action) {
+            ActionType.VOLUME_CHANGE -> changeVolume(context, match.spec.arg)
+            ActionType.VOLUME_MUTE -> setMute(context, match.spec.arg != 0)
+            else -> Unit
+        }
     }
 
     private fun changeVolume(context: Context, deltaPercent: Int) {

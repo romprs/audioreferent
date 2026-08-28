@@ -13,6 +13,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
@@ -24,6 +26,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
 
     private lateinit var statusText: TextView
+    private lateinit var resultText: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
     private lateinit var wakeWordInput: EditText
@@ -34,11 +37,26 @@ class MainActivity : Activity() {
 
     private val permissionRequestCode = 100
 
+    // Пока окно открыто — раз в секунду подтягиваем последний распознанный
+    // текст и статус из RecognitionState (их пишет фоновый сервис).
+    private val pollHandler = Handler(Looper.getMainLooper())
+    private val pollIntervalMs = 1000L
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            val text = RecognitionState.getLastText(this@MainActivity)
+            val status = RecognitionState.getLastStatus(this@MainActivity)
+            resultText.text = text.ifEmpty { "—" }
+            if (status.isNotEmpty()) statusText.text = status
+            pollHandler.postDelayed(this, pollIntervalMs)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         statusText = findViewById(R.id.statusText)
+        resultText = findViewById(R.id.resultText)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
         wakeWordInput = findViewById(R.id.wakeWordInput)
@@ -165,6 +183,16 @@ class MainActivity : Activity() {
             // Не критично: часть прошивок (в т.ч. компатибилити-слои не
             // на базе AOSP) может не поддерживать этот экран вообще.
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pollHandler.post(pollRunnable)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        pollHandler.removeCallbacks(pollRunnable)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

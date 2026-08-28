@@ -76,23 +76,39 @@ class ListenerService : Service(), RecognitionListener {
         }
     }
 
-    private fun buildNotification(text: String): Notification {
+    // openIntent — резервный способ довести до конца действия, которые
+    // открывают что-то на экране (браузер/приложение): прямой запуск из
+    // фонового сервиса Android может молча заблокировать (background
+    // activity launch restrictions), а нажатие на уведомление — это уже
+    // настоящее действие пользователя, которое такими ограничениями не
+    // блокируется никогда.
+    private fun buildNotification(text: String, openIntent: Intent? = null): Notification {
         val stopIntent = Intent(this, ListenerService::class.java).setAction(ACTION_STOP)
         val stopPendingIntent = PendingIntent.getService(
             this, 0, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, channelId)
+        val builder = Notification.Builder(this, channelId)
             .setContentTitle("Audioreferent — слушаю «${CommandRegistry.getWakeWord(this)}»")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .addAction(0, "Стоп", stopPendingIntent)
-            .build()
+
+        if (openIntent != null) {
+            val openPendingIntent = PendingIntent.getActivity(
+                this, openIntent.hashCode(), openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.setContentIntent(openPendingIntent)
+            builder.addAction(0, "Открыть", openPendingIntent)
+        }
+
+        return builder.build()
     }
 
-    private fun updateNotification(text: String) {
-        getSystemService(NotificationManager::class.java).notify(notificationId, buildNotification(text))
+    private fun updateNotification(text: String, openIntent: Intent? = null) {
+        getSystemService(NotificationManager::class.java).notify(notificationId, buildNotification(text, openIntent))
     }
 
     private fun ensureModel() {
@@ -183,34 +199,62 @@ class ListenerService : Service(), RecognitionListener {
         }
     }
 
-    // Как и в MainActivity раньше: реагируем только на финальный результат
-    // (граница фразы по паузе), чтобы команда не срабатывала по нескольку
-    // раз на одной фразе. Партиалы для фонового режима не нужны — их не с
-    // чем показывать без экрана.
+    // Реагируем только на финальный результат (граница фразы по паузе),
+    // чтобы команда не срабатывала по нескольку раз на одной фразе.
+    // Партиалы (см. onPartialResult) только показываются в окне, если
+    // оно сейчас открыто — на выполнение команд не влияют.
     private fun handleFinalUtterance(text: String) {
         if (text.isEmpty()) return
 
         val wakeWord = CommandRegistry.getWakeWord(this)
         if (!text.lowercase().contains(wakeWord)) {
+            RecognitionState.setLast(this, text, "Слушаю…")
             updateNotification("Слушаю…")
             return
         }
 
         val match = CommandRegistry.match(this, text)
         if (match == null) {
-            updateNotification("Услышала «$wakeWord», но не поняла команду: «$text»")
+            val status = "Услышала «$wakeWord», но не поняла команду"
+            RecognitionState.setLast(this, text, status)
+            updateNotification("$status: «$text»")
             return
         }
 
-        updateNotification("Выполняю: ${CommandRegistry.describe(match)}")
         try {
-            Actions.execute(this, match)
+            val intent = Actions.buildActivityIntent(this, match)
+            if (intent == null) {
+                Actions.executeNonActivity(this, match)
+                val status = "Выполняю: ${CommandRegistry.describe(match)}"
+                RecognitionState.setLast(this, text, status)
+                updateNotification(status)
+            } else {
+                // Пробуем открыть сразу — сработает, если фоновые
+                // ограничения Android это позволяют в данный момент.
+                // Кнопка/тап на уведомлении — гарантированный запасной путь
+                // (см. buildNotification), поэтому не проверяем результат.
+                try {
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // не критично — есть кнопка на уведомлении
+                }
+                val status = "${CommandRegistry.describe(match)} — если не открылось само, нажмите на уведомление"
+                RecognitionState.setLast(this, text, status)
+                updateNotification(status, intent)
+            }
         } catch (e: Exception) {
-            updateNotification("Ошибка выполнения: ${e.message}")
+            val status = "Ошибка выполнения: ${e.message}"
+            RecognitionState.setLast(this, text, status)
+            updateNotification(status)
         }
     }
 
-    override fun onPartialResult(hypothesis: String?) {}
+    override fun onPartialResult(hypothesis: String?) {
+        val text = extractText(hypothesis, "partial")
+        if (text.isNotEmpty()) {
+            RecognitionState.setLast(this, text, "Слушаю…")
+        }
+    }
 
     override fun onResult(hypothesis: String?) {
         handleFinalUtterance(extractText(hypothesis, "text"))
@@ -221,6 +265,7 @@ class ListenerService : Service(), RecognitionListener {
     }
 
     override fun onError(exception: Exception?) {
+        RecognitionState.setLast(this, "", "Ошибка распознавания, перезапускаю: ${exception?.message}")
         updateNotification("Ошибка распознавания, перезапускаю: ${exception?.message}")
         restartListening()
     }
