@@ -13,7 +13,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -23,6 +25,9 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.zip.ZipInputStream
 
 class ListenerService : Service(), RecognitionListener {
@@ -36,13 +41,29 @@ class ListenerService : Service(), RecognitionListener {
     private val channelId = "audioreferent_listener"
     private val notificationId = 1
 
+    // "Пульс": диагностика, живёт ли вообще процесс, когда окно закрыто —
+    // независимо от того, распознаёт ли что-то Vosk. Если время в
+    // уведомлении не двигается после закрытия окна, значит систма
+    // останавливает процесс целиком, а не просто мешает микрофону.
+    private var lastStatusText: String = "Запуск…"
+    private val heartbeatHandler = Handler(Looper.getMainLooper())
+    private val heartbeatIntervalMs = 10_000L
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            updateNotification(lastStatusText, null, includeHeartbeat = true)
+            heartbeatHandler.postDelayed(this, heartbeatIntervalMs)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         isRunning = true
         ServiceState.setShouldRun(this, true)
         ServiceWatchdog.scheduleNextCheck(this)
         createNotificationChannel()
-        startForeground(notificationId, buildNotification("Запуск…"))
+        startForeground(notificationId, buildNotification("Запуск…", heartbeat = true))
+        heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
         ensureModel()
     }
 
@@ -82,15 +103,16 @@ class ListenerService : Service(), RecognitionListener {
     // activity launch restrictions), а нажатие на уведомление — это уже
     // настоящее действие пользователя, которое такими ограничениями не
     // блокируется никогда.
-    private fun buildNotification(text: String, openIntent: Intent? = null): Notification {
+    private fun buildNotification(text: String, openIntent: Intent? = null, heartbeat: Boolean = false): Notification {
         val stopIntent = Intent(this, ListenerService::class.java).setAction(ACTION_STOP)
         val stopPendingIntent = PendingIntent.getService(
             this, 0, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val fullText = if (heartbeat) "$text · пульс ${timeFormat.format(Date())}" else text
         val builder = Notification.Builder(this, channelId)
             .setContentTitle("Audioreferent — слушаю «${CommandRegistry.getWakeWord(this)}»")
-            .setContentText(text)
+            .setContentText(fullText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .addAction(0, "Стоп", stopPendingIntent)
@@ -107,8 +129,10 @@ class ListenerService : Service(), RecognitionListener {
         return builder.build()
     }
 
-    private fun updateNotification(text: String, openIntent: Intent? = null) {
-        getSystemService(NotificationManager::class.java).notify(notificationId, buildNotification(text, openIntent))
+    private fun updateNotification(text: String, openIntent: Intent? = null, includeHeartbeat: Boolean = false) {
+        lastStatusText = text
+        getSystemService(NotificationManager::class.java)
+            .notify(notificationId, buildNotification(text, openIntent, heartbeat = includeHeartbeat))
     }
 
     private fun ensureModel() {
@@ -279,6 +303,7 @@ class ListenerService : Service(), RecognitionListener {
 
     override fun onDestroy() {
         isRunning = false
+        heartbeatHandler.removeCallbacks(heartbeatRunnable)
         speechService?.stop()
         speechService?.shutdown()
         super.onDestroy()
