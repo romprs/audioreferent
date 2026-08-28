@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 from typing import Any
+from urllib.parse import quote_plus
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +99,21 @@ def volume_mute(args: dict[str, Any]) -> None:
     raise ActionError("Не найден pactl/amixer для управления громкостью")
 
 
+def search_web(args: dict[str, Any]) -> None:
+    """Открывает браузер с поиском по остатку фразы после команды —
+    остаток кладёт сюда execute() под ключом 'remainder' (см. Match.remainder
+    в commands.py). Значение args['engine_url'] (опционально) задаёт
+    шаблон поисковика, {query} заменяется на текст запроса."""
+    query = str(args.get("remainder", "")).strip()
+    if not query:
+        raise ActionError("Не расслышала, что искать")
+    template = args.get("engine_url", "https://www.google.com/search?q={query}")
+    url = template.format(query=quote_plus(query))
+    if not shutil.which("xdg-open"):
+        raise ActionError("Команда 'xdg-open' не найдена")
+    _run_background(["xdg-open", url])
+
+
 def lock_screen(args: dict[str, Any]) -> None:  # noqa: ARG001
     if shutil.which("loginctl"):
         try:
@@ -116,11 +132,12 @@ ACTIONS = {
     "volume_change": volume_change,
     "volume_mute": volume_mute,
     "lock_screen": lock_screen,
+    "search_web": search_web,
 }
 
 
-def execute(action: str, args: dict[str, Any]) -> None:
+def execute(action: str, args: dict[str, Any], remainder: str = "") -> None:
     handler = ACTIONS.get(action)
     if handler is None:
         raise ActionError(f"Неизвестное действие: {action}")
-    handler(args)
+    handler({**args, "remainder": remainder})

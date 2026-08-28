@@ -37,10 +37,10 @@ def _cmd_test_command(args: argparse.Namespace) -> int:
     if match is None:
         print("Команда не распознана")
         return 1
-    print(f"Найдено действие: {match.spec.action} {match.spec.args}")
+    print(f"Найдено действие: {match.spec.action} {match.spec.args}" + (f" (остаток: {match.remainder!r})" if match.remainder else ""))
     if not args.dry_run:
         try:
-            actions.execute(match.spec.action, match.spec.args)
+            actions.execute(match.spec.action, match.spec.args, remainder=match.remainder)
         except actions.ActionError as exc:
             print(f"Ошибка выполнения: {exc}")
             return 1

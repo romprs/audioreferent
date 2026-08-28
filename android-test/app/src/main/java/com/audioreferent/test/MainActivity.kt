@@ -7,6 +7,7 @@ package com.audioreferent.test
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -14,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.method.ScrollingMovementMethod
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -28,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var commandsInput: EditText
     private lateinit var saveButton: Button
     private lateinit var resetButton: Button
+    private lateinit var listAppsButton: Button
 
     private val permissionRequestCode = 100
 
@@ -42,6 +45,7 @@ class MainActivity : Activity() {
         commandsInput = findViewById(R.id.commandsInput)
         saveButton = findViewById(R.id.saveButton)
         resetButton = findViewById(R.id.resetButton)
+        listAppsButton = findViewById(R.id.listAppsButton)
 
         wakeWordInput.setText(CommandRegistry.getWakeWord(this))
         commandsInput.setText(CommandRegistry.getCommandsJson(this))
@@ -53,6 +57,35 @@ class MainActivity : Activity() {
         }
         saveButton.setOnClickListener { saveSettings() }
         resetButton.setOnClickListener { resetSettings() }
+        listAppsButton.setOnClickListener { showInstalledApps() }
+    }
+
+    // Список установленных приложений (название + имя пакета), чтобы было
+    // откуда взять значение для "package" в команде LAUNCH_APP или
+    // "browser" в OPEN_BROWSER/OPEN_URL/SEARCH — угадать имя пакета иначе
+    // неоткуда. Текст выделяемый, чтобы можно было скопировать нужную строку.
+    private fun showInstalledApps() {
+        val pm = packageManager
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = pm.queryIntentActivities(launcherIntent, 0)
+            .map { it.loadLabel(pm).toString() to it.activityInfo.packageName }
+            .distinctBy { it.second }
+            .sortedBy { it.first.lowercase() }
+
+        val text = apps.joinToString("\n") { (label, pkg) -> "$label\n$pkg\n" }
+
+        val textView = TextView(this).apply {
+            setText(text)
+            setPadding(32, 32, 32, 32)
+            setTextIsSelectable(true)
+            movementMethod = ScrollingMovementMethod()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Установленные приложения (${apps.size})")
+            .setView(textView)
+            .setPositiveButton("Закрыть", null)
+            .show()
     }
 
     private fun saveSettings() {

@@ -20,6 +20,9 @@ def normalize(text: str) -> str:
 class Match:
     spec: CommandSpec
     phrase: str
+    # Остаток фразы после совпавшей команды — например, текст запроса для
+    # search_web ("вика найди погоду в москве" -> "погоду в москве").
+    remainder: str = ""
 
 
 class CommandRegistry:
@@ -34,7 +37,10 @@ class CommandRegistry:
         for spec in self._commands:
             for phrase in spec.phrases:
                 norm_phrase = normalize(phrase)
-                if norm_phrase and norm_phrase in normalized:
-                    if best is None or len(norm_phrase) > len(best.phrase):
-                        best = Match(spec=spec, phrase=norm_phrase)
+                if not norm_phrase:
+                    continue
+                idx = normalized.find(norm_phrase)
+                if idx >= 0 and (best is None or len(norm_phrase) > len(best.phrase)):
+                    remainder = normalized[idx + len(norm_phrase):].strip()
+                    best = Match(spec=spec, phrase=norm_phrase, remainder=remainder)
         return best

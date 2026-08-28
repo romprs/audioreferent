@@ -74,10 +74,17 @@
             android:inputType="text"
             android:layout_marginBottom="16dp" />
 
+        <Button
+            android:id="@+id/listAppsButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Список приложений (для package/browser)"
+            android:layout_marginBottom="12dp" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Команды (JSON). Доступные action: OPEN_BROWSER, VOLUME_CHANGE (arg — на сколько % громкости, отрицательное — тише), VOLUME_MUTE (arg 1 — выключить звук, 0 — включить)"
+            android:text="Команды (JSON). action: OPEN_BROWSER (browser — необязательно, пакет браузера); OPEN_URL (url — куда открыть, browser — необязательно); SEARCH (captureRemainder: true — искать то, что сказано после фразы, browser — необязательно); LAUNCH_APP (package — обязательно); VOLUME_CHANGE (arg — на сколько % громкости, отрицательное — тише); VOLUME_MUTE (arg 1 — выключить, 0 — включить)"
             android:textSize="12sp"
             android:layout_marginBottom="4dp" />
 

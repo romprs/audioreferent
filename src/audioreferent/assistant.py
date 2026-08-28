@@ -38,7 +38,7 @@ class Assistant:
                 feedback.speak("Не поняла команду")
             return
         try:
-            actions.execute(match.spec.action, match.spec.args)
+            actions.execute(match.spec.action, match.spec.args, remainder=match.remainder)
             if self.config.feedback.sound:
                 feedback.beep()
         except actions.ActionError:
