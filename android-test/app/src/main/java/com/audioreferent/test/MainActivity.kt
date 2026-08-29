@@ -22,11 +22,15 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
 
     private lateinit var statusText: TextView
     private lateinit var resultText: TextView
+    private lateinit var heartbeatText: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
     private lateinit var wakeWordInput: EditText
@@ -41,12 +45,22 @@ class MainActivity : Activity() {
     // текст и статус из RecognitionState (их пишет фоновый сервис).
     private val pollHandler = Handler(Looper.getMainLooper())
     private val pollIntervalMs = 1000L
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val pollRunnable = object : Runnable {
         override fun run() {
             val text = RecognitionState.getLastText(this@MainActivity)
             val status = RecognitionState.getLastStatus(this@MainActivity)
             resultText.text = text.ifEmpty { "—" }
             if (status.isNotEmpty()) statusText.text = status
+
+            val heartbeat = RecognitionState.getHeartbeat(this@MainActivity)
+            heartbeatText.text = if (heartbeat.isEmpty()) {
+                "Пульс сервиса: сервис ещё не запускался"
+            } else {
+                "Пульс сервиса: $heartbeat (сейчас ${timeFormat.format(Date())}) — " +
+                    "если сильно отстаёт, значит система останавливает процесс"
+            }
+
             pollHandler.postDelayed(this, pollIntervalMs)
         }
     }
@@ -57,6 +71,7 @@ class MainActivity : Activity() {
 
         statusText = findViewById(R.id.statusText)
         resultText = findViewById(R.id.resultText)
+        heartbeatText = findViewById(R.id.heartbeatText)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
         wakeWordInput = findViewById(R.id.wakeWordInput)

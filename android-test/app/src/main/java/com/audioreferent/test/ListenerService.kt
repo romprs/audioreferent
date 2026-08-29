@@ -51,6 +51,7 @@ class ListenerService : Service(), RecognitionListener {
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
+            RecognitionState.setHeartbeat(this@ListenerService, timeFormat.format(Date()))
             updateNotification(lastStatusText, null, includeHeartbeat = true)
             heartbeatHandler.postDelayed(this, heartbeatIntervalMs)
         }
@@ -63,6 +64,7 @@ class ListenerService : Service(), RecognitionListener {
         ServiceWatchdog.scheduleNextCheck(this)
         createNotificationChannel()
         startForeground(notificationId, buildNotification("Запуск…", heartbeat = true))
+        RecognitionState.setHeartbeat(this, timeFormat.format(Date()))
         heartbeatHandler.postDelayed(heartbeatRunnable, heartbeatIntervalMs)
         ensureModel()
     }
