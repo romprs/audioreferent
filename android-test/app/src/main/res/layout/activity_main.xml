@@ -71,6 +71,13 @@
                 android:text="Стоп" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/assistantRoleButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Стать ассистентом по умолчанию"
+            android:layout_marginBottom="24dp" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

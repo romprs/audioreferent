@@ -8,6 +8,7 @@ package com.audioreferent.test
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.role.RoleManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -38,8 +39,10 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var resetButton: Button
     private lateinit var listAppsButton: Button
+    private lateinit var assistantRoleButton: Button
 
     private val permissionRequestCode = 100
+    private val assistantRoleRequestCode = 200
 
     // Пока окно открыто — раз в секунду подтягиваем последний распознанный
     // текст и статус из RecognitionState (их пишет фоновый сервис).
@@ -79,6 +82,7 @@ class MainActivity : Activity() {
         saveButton = findViewById(R.id.saveButton)
         resetButton = findViewById(R.id.resetButton)
         listAppsButton = findViewById(R.id.listAppsButton)
+        assistantRoleButton = findViewById(R.id.assistantRoleButton)
 
         wakeWordInput.setText(CommandRegistry.getWakeWord(this))
         commandsInput.setText(CommandRegistry.getCommandsJson(this))
@@ -93,6 +97,47 @@ class MainActivity : Activity() {
         saveButton.setOnClickListener { saveSettings() }
         resetButton.setOnClickListener { resetSettings() }
         listAppsButton.setOnClickListener { showInstalledApps() }
+        assistantRoleButton.setOnClickListener { requestAssistantRole() }
+    }
+
+    // Попытка получить системную роль "ассистент по умолчанию"
+    // (RoleManager.ROLE_ASSISTANT, Android 10+). На части устройств
+    // приложения с этой ролью получают дополнительные фоновые привилегии,
+    // недоступные обычным приложениям, — то самое, чего не хватает для
+    // надёжной работы после закрытия окна. Не гарантирую, что слой
+    // совместимости этого конкретного устройства вообще поддерживает
+    // RoleManager — единственный способ проверить — попробовать.
+    private fun requestAssistantRole() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Toast.makeText(this, "Нужен Android 10+, на этой версии роль недоступна", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            val roleManager = getSystemService(RoleManager::class.java)
+            if (roleManager == null || !roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+                Toast.makeText(this, "Роль ассистента недоступна на этом устройстве", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+                Toast.makeText(this, "Уже назначено ассистентом по умолчанию", Toast.LENGTH_SHORT).show()
+                return
+            }
+            startActivityForResult(roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT), assistantRoleRequestCode)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Не удалось запросить роль: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == assistantRoleRequestCode) {
+            val message = if (resultCode == RESULT_OK) {
+                "Назначено ассистентом по умолчанию — проверьте, помогает ли это пережить закрытие окна"
+            } else {
+                "Не назначено (отменено или роль отклонена системой)"
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
     }
 
     // Список установленных приложений (название + имя пакета), чтобы было
