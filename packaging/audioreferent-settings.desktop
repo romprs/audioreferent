@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Настройки audioreferent
+Name[en]=audioreferent Settings
+Comment=Активационное слово, микрофон и команды голосового помощника
+Comment[en]=Voice assistant wake word, microphone and commands
+Exec=audioreferent settings
+Icon=audio-input-microphone
+Terminal=false
+Categories=Settings;Audio;

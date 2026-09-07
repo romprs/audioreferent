@@ -48,6 +48,9 @@ class Config:
     command_timeout_seconds: float
     feedback: Feedback
     commands: list[CommandSpec]
+    spk_model_path: str | None = None
+    voice_lock_enabled: bool = False
+    voice_lock_threshold: float = 0.5
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -62,6 +65,9 @@ class Config:
             command_timeout_seconds=data.get("command_timeout_seconds", 6),
             feedback=feedback,
             commands=commands,
+            spk_model_path=data.get("spk_model_path"),
+            voice_lock_enabled=data.get("voice_lock_enabled", False),
+            voice_lock_threshold=data.get("voice_lock_threshold", 0.5),
         )
 
 
@@ -80,6 +86,32 @@ def load_config() -> Config:
     if USER_CONFIG_PATH.exists():
         data = _deep_merge(data, _read_yaml(USER_CONFIG_PATH))
     return Config.from_dict(data)
+
+
+def save_config(cfg: Config) -> None:
+    """Полностью перезаписывает пользовательский конфиг текущими
+    настройками. В отличие от set_wake_word (который трогает только один
+    ключ поверх остального), здесь сохраняются все поля явно — так делает
+    GUI-окно настроек, где пользователь одновременно видит и правит их
+    все, и частичный merge только запутал бы происходящее."""
+    USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "wake_word": cfg.wake_word,
+        "wake_word_fuzzy_threshold": cfg.wake_word_fuzzy_threshold,
+        "input_device": cfg.input_device,
+        "model_path": cfg.model_path,
+        "sample_rate": cfg.sample_rate,
+        "command_timeout_seconds": cfg.command_timeout_seconds,
+        "feedback": {"sound": cfg.feedback.sound, "speech": cfg.feedback.speech},
+        "commands": [
+            {"phrases": c.phrases, "action": c.action, "args": c.args} for c in cfg.commands
+        ],
+        "spk_model_path": cfg.spk_model_path,
+        "voice_lock_enabled": cfg.voice_lock_enabled,
+        "voice_lock_threshold": cfg.voice_lock_threshold,
+    }
+    with open(USER_CONFIG_PATH, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, allow_unicode=True, sort_keys=False)
 
 
 def set_wake_word(word: str) -> None:

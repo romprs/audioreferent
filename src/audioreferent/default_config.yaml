@@ -19,6 +19,20 @@ model_path: null
 
 sample_rate: 16000
 
+# Голосовая биометрия (необязательно): проверка, что активационное слово
+# произнёс тот же человек, что записал образец(ы) голоса через
+# `audioreferent settings` (вкладка "Голос") — фильтр "чей голос", а не
+# средство от фонового шума как такового. Пока образцов нет или
+# voice_lock_enabled: false, ничего не меняется — как будто функции нет.
+# null = модель ищется по умолчанию в
+# ~/.local/share/vosk/vosk-model-spk-0.4
+spk_model_path: null
+voice_lock_enabled: false
+# Косинусное сходство x-векторов, начиная с которого голос считается
+# "своим". Выше — строже (легче отклонить свой же голос в шуме), ниже —
+# мягче (легче пропустить чужой).
+voice_lock_threshold: 0.5
+
 # Сколько секунд после активационного слова ждать команду
 command_timeout_seconds: 6
 
@@ -43,6 +57,56 @@ commands:
   - phrases: ["открой файловый менеджер", "открой проводник", "открой файлы"]
     action: launch_app
     args: {app: "xdg-open", target: "~"}
+
+  - phrases: ["запусти яндекс браузер", "открой яндекс браузер"]
+    action: launch_app
+    args:
+      candidates: ["yandex-browser-stable", "yandex-browser"]
+
+  - phrases: ["сверни текущее окно", "сверни окно"]
+    action: minimize_window
+    args: {}
+
+  - phrases: ["закрой текущее окно", "закрой окно"]
+    action: close_window
+    args: {}
+
+  - phrases: ["сверни все окна"]
+    action: minimize_all
+    args: {}
+
+  - phrases: ["сохрани документ", "сохрани файл"]
+    action: send_keys
+    args: {keys: "ctrl+s"}
+
+  - phrases: ["создай текстовый документ", "создай документ"]
+    action: launch_app
+    args:
+      candidates: ["r7-office-desktopeditors --new:word"]
+
+  - phrases: ["создай табличный документ", "создай таблицу"]
+    action: launch_app
+    args:
+      candidates: ["r7-office-desktopeditors --new:cell"]
+
+  - phrases: ["создай презентацию"]
+    action: launch_app
+    args:
+      candidates: ["r7-office-desktopeditors --new:slide"]
+
+  # Всё, что сказано после фразы, считается адресом сайта:
+  # "вика открой сайт яндекс" -> алиас из sites, либо буквальный домен
+  # ("точка" распознаётся как "."), либо, если ничего не подошло —
+  # обычный поиск по этому запросу (см. search_web).
+  - phrases: ["открой сайт", "перейди на сайт"]
+    action: open_url
+    args:
+      sites:
+        яндекс: "ya.ru"
+        гугл: "google.com"
+        почта: "mail.ru"
+        вконтакте: "vk.com"
+        ютуб: "youtube.com"
 
   - phrases: ["сделай громче", "увеличь громкость", "громче"]
     action: volume_change

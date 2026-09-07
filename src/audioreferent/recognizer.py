@@ -32,22 +32,44 @@ def resolve_model_path(configured_path: str | None) -> str:
     )
 
 
+def resolve_spk_model_path(configured_path: str | None) -> str | None:
+    """Как resolve_model_path, но для необязательной spk-модели (проверка
+    голоса) — при отсутствии просто возвращает None вместо исключения,
+    так что функция без неё работает как раньше."""
+    if configured_path:
+        return configured_path if Path(configured_path).is_dir() else None
+    default = Path.home() / ".local" / "share" / "vosk" / "vosk-model-spk-0.4"
+    return str(default) if default.is_dir() else None
+
+
 class SpeechRecognizer:
-    def __init__(self, model_path: str, sample_rate: int):
+    def __init__(self, model_path: str, sample_rate: int, spk_model_path: str | None = None):
         self._model = vosk.Model(model_path)
         self._sample_rate = sample_rate
         self._recognizer = vosk.KaldiRecognizer(self._model, sample_rate)
+        self._last_speaker_vector: list[float] | None = None
+        if spk_model_path:
+            self._recognizer.SetSpkModel(vosk.SpkModel(spk_model_path))
 
     def reset(self) -> None:
         self._recognizer.Reset()
+        self._last_speaker_vector = None
 
     def accept_chunk(self, chunk: bytes) -> str | None:
         """Отдаёт чанк движку. Возвращает финальный распознанный текст,
-        если Vosk определил конец фразы (по паузе), иначе None."""
+        если Vosk определил конец фразы (по паузе), иначе None. Если
+        подключена spk-модель, заодно запоминает x-вектор голоса этой
+        фразы (см. last_speaker_vector) — Vosk отдаёт его только вместе
+        с финальным результатом, не с промежуточным (partial)."""
         if self._recognizer.AcceptWaveform(chunk):
-            text = json.loads(self._recognizer.Result()).get("text", "")
-            return text
+            result = json.loads(self._recognizer.Result())
+            self._last_speaker_vector = result.get("spk")
+            return result.get("text", "")
         return None
 
     def partial_text(self) -> str:
         return json.loads(self._recognizer.PartialResult()).get("partial", "")
+
+    @property
+    def last_speaker_vector(self) -> list[float] | None:
+        return self._last_speaker_vector

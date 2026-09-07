@@ -30,6 +30,12 @@ def _cmd_set_wakeword(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_settings(args: argparse.Namespace) -> int:  # noqa: ARG001
+    from .gui import main as gui_main  # отложенный импорт: тянет PySide6
+
+    return gui_main()
+
+
 def _cmd_test_command(args: argparse.Namespace) -> int:
     cfg = config.load_config()
     registry = CommandRegistry(cfg.commands)
@@ -61,6 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_wake = subparsers.add_parser("set-wakeword", help="задать активационное слово")
     p_wake.add_argument("word")
     p_wake.set_defaults(func=_cmd_set_wakeword)
+
+    p_settings = subparsers.add_parser("settings", help="открыть GUI-окно настроек")
+    p_settings.set_defaults(func=_cmd_settings)
 
     p_test = subparsers.add_parser("test-command", help="проверить сопоставление текста команде без аудио")
     p_test.add_argument("text")

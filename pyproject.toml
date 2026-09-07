@@ -20,4 +20,4 @@ audioreferent = "audioreferent.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-audioreferent = ["default_config.yaml"]
+audioreferent = ["default_config.yaml", "voice/*.mp3"]

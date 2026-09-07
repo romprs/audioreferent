@@ -15,6 +15,9 @@ BuildRequires:  python3-pip
 Requires:       python3
 Requires:       portaudio
 Requires:       alsa-lib
+Requires:       xdotool
+Requires:       python3-pyside6
+Requires:       mpg123
 Recommends:     espeak-ng
 
 # vosk/sounddevice — готовые .so внутри их wheel-пакетов, у rpmbuild нет
@@ -60,10 +63,14 @@ chmod 0755 %{buildroot}%{_bindir}/audioreferent
 mkdir -p %{buildroot}%{_userunitdir}
 install -m 0644 systemd/audioreferent.service %{buildroot}%{_userunitdir}/audioreferent.service
 
+mkdir -p %{buildroot}%{_datadir}/applications
+install -m 0644 packaging/audioreferent-settings.desktop %{buildroot}%{_datadir}/applications/audioreferent-settings.desktop
+
 %files
 %{python3_sitelib}/*
 %{_bindir}/audioreferent
 %{_userunitdir}/audioreferent.service
+%{_datadir}/applications/audioreferent-settings.desktop
 %doc README.md
 
 %post

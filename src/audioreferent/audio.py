@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -36,6 +37,27 @@ def microphone_stream(
 
     with stream:
         yield _chunks()
+
+
+def record_raw(sample_rate: int, device: int | str | None, duration_seconds: float) -> bytes:
+    """Записывает моно PCM16 фиксированной длительности. Не через
+    sounddevice.rec()/wait() — той удобной паре нужен NumPy, которого в
+    проекте нарочно нет (см. microphone_stream выше)."""
+    frames_needed = int(sample_rate * duration_seconds)
+    collected = bytearray()
+    done = threading.Event()
+
+    def _callback(indata, frames, time_info, status):  # noqa: ARG001
+        collected.extend(bytes(indata))
+        if len(collected) >= frames_needed * 2:  # int16 = 2 байта на сэмпл
+            done.set()
+
+    with sd.RawInputStream(
+        samplerate=sample_rate, blocksize=0, device=device, dtype="int16", channels=1, callback=_callback
+    ):
+        done.wait(timeout=duration_seconds + 5)
+
+    return bytes(collected[: frames_needed * 2])
 
 
 def list_input_devices() -> list[str]:
