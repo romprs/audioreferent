@@ -1,0 +1,8 @@
+# Linux-only project (RED OS) — text files must always use LF, regardless
+# of a contributor's local core.autocrlf on Windows. Without this, `git
+# archive` on a Windows machine with autocrlf=true injects CRLF into the
+# packaged spec/shell files and breaks rpmbuild's %prep shell script on
+# the Linux build host.
+* text=auto eol=lf
+*.mp3 -text
+*.wav -text
