@@ -4,7 +4,7 @@ After=pulseaudio.service pipewire.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/audioreferent run
+ExecStart=/usr/bin/audioreferent run
 Restart=on-failure
 RestartSec=3
 

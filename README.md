@@ -90,11 +90,16 @@ audioreferent settings
 audioreferent run
 ```
 
-Как systemd user-сервис:
+Как systemd user-сервис (при установке через RPM юнит уже стоит в
+`/usr/lib/systemd/user/` — достаточно `systemctl --user enable --now
+audioreferent.service`; ниже — для установки через `pip install --user`):
 
 ```bash
 mkdir -p ~/.config/systemd/user
 cp systemd/audioreferent.service ~/.config/systemd/user/
+# ExecStart в файле указывает на /usr/bin/audioreferent (путь RPM) —
+# для pip install --user поправьте на %h/.local/bin/audioreferent
+sed -i "s|/usr/bin/audioreferent|%h/.local/bin/audioreferent|" ~/.config/systemd/user/audioreferent.service
 systemctl --user daemon-reload
 systemctl --user enable --now audioreferent.service
 ```
