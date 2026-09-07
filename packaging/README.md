@@ -61,21 +61,54 @@ pip-сгенерированные shebang'и в `venv/bin/*` и `pyvenv.cfg` с
 
 ## Сборка
 
+Пакет вкладывает модели Vosk внутрь себя (см. "Почему сборка вкладывает
+модели" ниже) — их архивы (`Source1`/`Source2` в spec) не хранятся в git
+(слишком большие для репозитория) и должны лежать в `~/rpmbuild/SOURCES/`
+до запуска `rpmbuild` отдельно от исходного тарбола проекта:
+
 ```bash
 sudo dnf install rpm-build python3-devel python3-pip systemd-rpm-macros
 
-# Собрать исходный тарбол из этого репозитория
+mkdir -p ~/rpmbuild/{SOURCES,SPECS}
+
+# 1. Исходный тарбол из этого репозитория
 VERSION=0.1.0
 git archive --prefix="audioreferent-$VERSION/" -o "audioreferent-$VERSION.tar.gz" HEAD
-
-mkdir -p ~/rpmbuild/{SOURCES,SPECS}
 cp "audioreferent-$VERSION.tar.gz" ~/rpmbuild/SOURCES/
-cp packaging/audioreferent.spec ~/rpmbuild/SPECS/
 
+# 2. Модели — см. "Как подготовить архивы моделей" ниже, если их ещё нет
+cp vosk-model-ru-0.42-noextras.tar.gz vosk-model-spk-0.4.tar.gz ~/rpmbuild/SOURCES/
+
+cp packaging/audioreferent.spec ~/rpmbuild/SPECS/
 rpmbuild -ba ~/rpmbuild/SPECS/audioreferent.spec
 ```
 
 Готовый пакет появится в `~/rpmbuild/RPMS/<arch>/audioreferent-0.1.0-1*.rpm`.
+
+## Как подготовить архивы моделей (`Source1`/`Source2`)
+
+Нужны один раз (или заново — если меняется версия модели). `Source1` —
+НЕ оригинальный `vosk-model-ru-0.42.zip` с alphacephei.com напрямую: из
+него убраны каталоги `rescore/` и `rnnlm/` — с используемой версией
+`vosk` они не грузятся (`rescore` — ошибка чтения, `rnnlm` — сегфолт
+всего процесса, см. README проекта), базовый граф без них всё равно
+заметно точнее маленькой модели:
+
+```bash
+curl -L -o model.zip https://alphacephei.com/vosk/models/vosk-model-ru-0.42.zip
+unzip -q model.zip
+rm -rf vosk-model-ru-0.42/rescore vosk-model-ru-0.42/rnnlm
+tar czf vosk-model-ru-0.42-noextras.tar.gz vosk-model-ru-0.42
+
+curl -L -o spk.zip https://alphacephei.com/vosk/models/vosk-model-spk-0.4.zip
+unzip -q spk.zip
+tar czf vosk-model-spk-0.4.tar.gz vosk-model-spk-0.4
+```
+
+Крупные файлы (~470 МБ архив с моделью) скачивать напрямую на самой РЭД
+ОС может быть ненадёжно — на тестовом стенде наблюдался тихий обрыв
+скачивания без ошибки (см. память проекта); надёжнее скачать на другой
+машине и перенести `scp`.
 
 ## Установка
 

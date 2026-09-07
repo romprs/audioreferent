@@ -11,8 +11,16 @@ import vosk
 vosk.SetLogLevel(-1)  # не засорять stdout служебными логами Kaldi
 
 DEFAULT_MODEL_LOCATIONS = [
+    # Куда RPM кладёт заранее подготовленную (без rescore/rnnlm, см.
+    # README про их несовместимость) полную модель — первый кандидат,
+    # чтобы установка из RPM работала сразу без правки конфига.
+    "/usr/share/audioreferent/vosk-model",
     "/usr/share/vosk-model-small-ru",
     "/usr/local/share/vosk-model-small-ru",
+]
+
+DEFAULT_SPK_MODEL_LOCATIONS = [
+    "/usr/share/audioreferent/vosk-model-spk",
 ]
 
 
@@ -38,6 +46,9 @@ def resolve_spk_model_path(configured_path: str | None) -> str | None:
     так что функция без неё работает как раньше."""
     if configured_path:
         return configured_path if Path(configured_path).is_dir() else None
+    for candidate in DEFAULT_SPK_MODEL_LOCATIONS:
+        if Path(candidate).is_dir():
+            return candidate
     default = Path.home() / ".local" / "share" / "vosk" / "vosk-model-spk-0.4"
     return str(default) if default.is_dir() else None
 

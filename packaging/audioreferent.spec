@@ -8,6 +8,13 @@ Summary:        Голосовой помощник с командами на �
 License:        Proprietary
 URL:            https://github.com/romprs/audioreferent
 Source0:        %{name}-%{version}.tar.gz
+# Заранее подготовленные модели Vosk — не собираются из чего-либо, просто
+# вкладываются как есть (см. комментарий у их распаковки в %%install про
+# то, почему это НЕ оригинальные zip с alphacephei.com напрямую). Кладите
+# такие же файлы в rpmbuild/SOURCES/ перед сборкой — они не входят в git
+# (слишком большие для репозитория), см. packaging/README.md.
+Source1:        vosk-model-ru-0.42-noextras.tar.gz
+Source2:        vosk-model-spk-0.4.tar.gz
 
 BuildRequires:  python3-devel
 BuildRequires:  python3-pip
@@ -27,8 +34,8 @@ Recommends:     espeak-ng
 # внутри него есть свои .so (vosk, cffi), но это не системные библиотеки
 # для остального дистрибутива, и сканирование только зря тянет левые
 # Requires/Provides.
-%global __requires_exclude_from ^/opt/%{name}/venv/.*$
-%global __provides_exclude_from ^/opt/%{name}/venv/.*$
+%global __requires_exclude_from ^(/opt/%{name}/venv/|%{_datadir}/%{name}/vosk-model).*$
+%global __provides_exclude_from ^(/opt/%{name}/venv/|%{_datadir}/%{name}/vosk-model).*$
 %global __brp_mangle_shebangs_exclude_from ^/opt/%{name}/venv/.*$
 
 %description
@@ -82,6 +89,20 @@ exec /opt/audioreferent/venv/bin/python3 -m audioreferent.cli "$@"
 WRAPPER
 chmod 0755 %{buildroot}%{_bindir}/audioreferent
 
+# Модели Vosk — вкладываем прямо в пакет, чтобы установка на закрытом
+# контуре (без интернета) сразу давала рабочего помощника, без отдельного
+# ручного шага "скачайте и положите модель руками". Source1 — НЕ
+# оригинальный vosk-model-ru-0.42.zip с alphacephei.com: у его каталогов
+# rescore/ и rnnlm/ не грузится с используемой версией vosk (rescore —
+# ошибка чтения JSON, rnnlm — сегфолт всего процесса, см. README) — Source1
+# это тот же архив с уже убранными этими двумя каталогами, распознаёт
+# по-прежнему заметно точнее маленькой модели, просто без этих надстроек.
+mkdir -p %{buildroot}%{_datadir}/%{name}
+tar xzf %{SOURCE1} -C %{buildroot}%{_datadir}/%{name}
+mv %{buildroot}%{_datadir}/%{name}/vosk-model-ru-0.42 %{buildroot}%{_datadir}/%{name}/vosk-model
+tar xzf %{SOURCE2} -C %{buildroot}%{_datadir}/%{name}
+mv %{buildroot}%{_datadir}/%{name}/vosk-model-spk-0.4 %{buildroot}%{_datadir}/%{name}/vosk-model-spk
+
 mkdir -p %{buildroot}%{_userunitdir}
 install -m 0644 systemd/audioreferent.service %{buildroot}%{_userunitdir}/audioreferent.service
 
@@ -93,6 +114,8 @@ install -m 0644 packaging/audioreferent-settings.desktop %{buildroot}%{_datadir}
 %{_bindir}/audioreferent
 %{_userunitdir}/audioreferent.service
 %{_datadir}/applications/audioreferent-settings.desktop
+%{_datadir}/%{name}/vosk-model
+%{_datadir}/%{name}/vosk-model-spk
 %doc README.md
 
 %post

@@ -20,6 +20,18 @@
 
 ## Установка на RED OS
 
+**Через RPM** (`packaging/audioreferent.spec`, см. `packaging/README.md`) —
+рекомендуемый способ для закрытого контура без интернета: пакет
+самодостаточен, полная модель Vosk (без `rescore`/`rnnlm` — см. ниже,
+почему) и модель проверки голоса уже внутри (`/usr/share/audioreferent/`),
+отдельно скачивать ничего не нужно:
+
+```bash
+sudo dnf install ./audioreferent-<версия>.rpm
+```
+
+**Через pip** (для разработки/там, где есть интернет):
+
 ```bash
 sudo dnf install python3-pip python3-devel portaudio-devel alsa-lib-devel espeak-ng xdotool python3-pyside6 mpg123
 python3 -m pip install --user .
