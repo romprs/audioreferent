@@ -234,8 +234,18 @@ ACTIONS = {
 }
 
 
+def _redmail_actions() -> dict[str, Any]:
+    # Отдельный модуль (redmail_actions.py) и ленивый импорт — он тянет
+    # redmail_client/ru_datetime, которые этому файлу самому не нужны;
+    # так action_failed вида "неизвестное действие" не зависит от того,
+    # что почта вообще как-то настроена.
+    from . import redmail_actions
+
+    return redmail_actions.ACTIONS
+
+
 def execute(action: str, args: dict[str, Any], remainder: str = "") -> None:
-    handler = ACTIONS.get(action)
+    handler = ACTIONS.get(action) or _redmail_actions().get(action)
     if handler is None:
         raise ActionError(f"Неизвестное действие: {action}")
     handler({**args, "remainder": remainder})
