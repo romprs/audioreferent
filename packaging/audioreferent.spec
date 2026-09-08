@@ -1,6 +1,6 @@
 Name:           audioreferent
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Голосовой помощник с командами на русском языке для РЭД ОС
 
 # Стандартное для РЭД ОС payload-сжатие (zstd) дало битый архив на одном
@@ -130,5 +130,9 @@ echo "Изменить: audioreferent set-wakeword \"<слово>\""
 echo "Включить автозапуск: systemctl --user enable --now audioreferent.service"
 
 %changelog
+* Wed Sep 09 2026 romprs <romprs@gmail.com> - 0.1.0-2
+- Голосовые команды управления redmail через его локальный IPC-канал
+  (открой почту / создай встречу / перенеси встречу / отмени встречу)
+
 * Thu Aug 27 2026 romprs <romprs@gmail.com> - 0.1.0-1
 - Первая версия пакета
