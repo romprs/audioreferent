@@ -21,6 +21,28 @@ class ActionError(Exception):
 
 
 def _run_background(argv: list[str]) -> None:
+    """Запустить приложение и не ждать его.
+
+    Помощник работает как systemd --user сервис, и обычный Popen (даже с
+    start_new_session) оставляет ребёнка в cgroup сервиса: при перезапуске
+    или остановке сервиса systemd убивает всю группу — вместе с браузером,
+    почтой, Р7, которые человек открыл голосом (так однажды погиб redmail,
+    оставив после себя устаревший файл адреса IPC). Поэтому, где есть
+    systemd-run, приложение уходит в собственный transient-юнит
+    пользовательского менеджера и живёт независимо от помощника; без
+    systemd-run (запуск из терминала, другая init-система) — как раньше.
+    """
+    if shutil.which("systemd-run"):
+        try:
+            subprocess.run(
+                ["systemd-run", "--user", "--collect", "--quiet", "--"] + argv,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            log.debug("systemd-run недоступен, запускаю %s напрямую", argv[0])
     subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

@@ -66,6 +66,12 @@ def send_request(action: str, args: dict[str, Any] | None = None) -> dict:
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         conn.settimeout(_TIMEOUT_SECONDS)
         conn.connect(endpoint)
+    except (ConnectionRefusedError, FileNotFoundError) as exc:
+        # Файл адреса есть, а слушать некому: redmail умер, не успев его
+        # убрать (крах, SIGKILL — например, при перезапуске сервиса, из
+        # которого его запустили). Для нас это то же «почта не запущена» —
+        # запускать её; свой устаревший сокет redmail при старте уберёт сам.
+        raise RedmailNotRunning("Почта не запущена") from exc
     except OSError as exc:
         raise RedmailError("Не удалось подключиться к почте") from exc
     try:
