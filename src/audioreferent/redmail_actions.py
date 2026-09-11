@@ -60,7 +60,26 @@ def _call(args: dict[str, Any], func, *call_args, **call_kwargs):
         _launch_redmail(args)
         raise ActionError("Запускаю почту, повторите команду") from exc
     except RedmailError as exc:
-        raise ActionError(str(exc)) from exc
+        raise ActionError(_spoken_redmail_error(str(exc))) from exc
+
+
+# Ответы redmail — свободный текст для человека в GUI; для голоса сводим
+# их к фиксированным фразам, для которых есть записи (см.
+# feedback._PRERECORDED_PHRASES). Всё, что сюда не попало, озвучится
+# общим «Не удалось выполнить команду», а точный текст останется в журнале.
+_REDMAIL_ERROR_PHRASES = (
+    ("организовали вы сами", "Изменить можно только свою встречу"),
+    ("учётной записи", "Почта не настроена"),
+    ("не настроена", "Почта не настроена"),
+)
+
+
+def _spoken_redmail_error(message: str) -> str:
+    log.info("Ответ redmail: %s", message)
+    for marker, phrase in _REDMAIL_ERROR_PHRASES:
+        if marker in message:
+            return phrase
+    return message
 
 
 def _find_single_event(
@@ -72,14 +91,15 @@ def _find_single_event(
     какое из событий переносить/отменять."""
     events = _call(args, _redmail_find_events, subject=subject or None, date=on_date.isoformat())
     if not events:
-        label = f"«{subject}»" if subject else "на эту дату"
-        raise ActionError(f"Событие {label} не найдено")
+        log.info("Событие не найдено: тема %r, дата %s", subject, on_date.isoformat())
+        raise ActionError("Событие не найдено")
     if len(events) > 1 and hint_time is not None:
         narrowed = [event for event in events if _local_hour_minute(event["start"]) == hint_time]
         if narrowed:
             events = narrowed
     if len(events) > 1:
-        raise ActionError("Найдено несколько подходящих событий, уточните тему")
+        log.info("Несколько событий по теме %r на %s: %s", subject, on_date.isoformat(), [e["summary"] for e in events])
+        raise ActionError("Найдено несколько похожих событий, уточните тему")
     return events[0]
 
 
@@ -123,12 +143,12 @@ def redmail_reschedule_event(args: dict[str, Any]) -> None:
     words = text.split()
     split = _split_on_last_word(words, "на")
     if split is None:
-        raise ActionError("Не расслышала, на какую дату и время перенести")
+        raise ActionError("Не расслышала, на какое время перенести")
     head_words, tail_words = split
 
     _leftover, new_date, new_time = ru_datetime.extract(" ".join(tail_words), today=today)
     if new_time is None:
-        raise ActionError("Не расслышала время, на которое перенести")
+        raise ActionError("Не расслышала, на какое время перенести")
     if new_date is None:
         new_date = today
 

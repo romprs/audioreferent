@@ -160,5 +160,25 @@ def test_cancel_event_wraps_redmail_error_on_cancel():
         "audioreferent.redmail_actions._redmail_cancel_event",
         side_effect=RedmailError("Отменить можно только встречу, которую организовали вы сами."),
     ):
-        with pytest.raises(ActionError, match="организовали"):
+        # свободный текст redmail сводится к фиксированной фразе, для которой есть запись
+        with pytest.raises(ActionError, match="^Изменить можно только свою встречу$"):
             redmail_actions.redmail_cancel_event({"remainder": "совещание"})
+
+
+def test_every_spoken_phrase_has_a_recording_entry():
+    """Все фразы, которые redmail-команды могут произнести, обязаны быть в
+    feedback._PRERECORDED_PHRASES — иначе вместо них прозвучит общее
+    «Не удалось выполнить команду»."""
+    from audioreferent import feedback
+    from audioreferent.redmail_actions import _REDMAIL_ERROR_PHRASES
+
+    spoken = {
+        "Запускаю почту, повторите команду",
+        "Не расслышала тему события",
+        "Не расслышала время события",
+        "Не расслышала, на какое время перенести",
+        "Событие не найдено",
+        "Найдено несколько похожих событий, уточните тему",
+    } | {phrase for _marker, phrase in _REDMAIL_ERROR_PHRASES}
+    missing = spoken - set(feedback._PRERECORDED_PHRASES)
+    assert not missing, missing

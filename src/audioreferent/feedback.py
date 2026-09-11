@@ -15,14 +15,27 @@ _SOUND_CANDIDATES = [
     "/usr/share/sounds/freedesktop/stereo/complete.oga",
 ]
 
-# Заранее записанные фразы (женский голос, сгенерированы офлайн один раз —
-# синтез espeak-ng в реальном времени звучит заметно грубее и хуже
-# разборчив). Для остальных фраз, которых здесь нет, используется
-# espeak-ng как раньше — так что даже без этих записей ничего не ломается.
+# Заранее записанные фразы (один и тот же женский голос, записаны один раз
+# через narakeet — синтез espeak-ng в реальном времени звучит заметно
+# грубее и хуже разборчив, поэтому помощник говорит ТОЛЬКО этими
+# записями). Все тексты, которые помощник произносит, обязаны быть в этом
+# списке; для текста без записи speak() проигрывает fallback (обычно
+# «Не удалось выполнить команду»), а сам текст остаётся в журнале. Синтез
+# espeak-ng — лишь резерв на случай, когда записей нет вовсе (mpg123 не
+# установлен или файлы потеряны).
 _PRERECORDED_PHRASES = {
     "Команда не распознана": "voice/command_not_recognized.mp3",
     "Голос не соответствует эталону": "voice/voice_mismatch.mp3",
     "Не удалось выполнить команду": "voice/action_failed.mp3",
+    # --- команды redmail (redmail_actions.py) ---
+    "Запускаю почту, повторите команду": "voice/mail_starting.mp3",
+    "Почта не настроена": "voice/mail_not_configured.mp3",
+    "Не расслышала тему события": "voice/no_subject.mp3",
+    "Не расслышала время события": "voice/no_time.mp3",
+    "Не расслышала, на какое время перенести": "voice/no_new_time.mp3",
+    "Событие не найдено": "voice/event_not_found.mp3",
+    "Найдено несколько похожих событий, уточните тему": "voice/several_events.mp3",
+    "Изменить можно только свою встречу": "voice/not_your_event.mp3",
 }
 
 
@@ -50,17 +63,35 @@ def beep() -> None:
     sys.stdout.flush()
 
 
-def speak(text: str) -> None:
+def _play_recorded(text: str) -> bool:
+    """Проиграть запись фразы. False — записи для этого текста нет (или
+    файл отсутствует / mpg123 не установлен / не проигрался)."""
     relative_path = _PRERECORDED_PHRASES.get(text)
-    if relative_path and shutil.which("mpg123"):
-        try:
-            with resources.as_file(resources.files("audioreferent").joinpath(relative_path)) as audio_path:
-                subprocess.run(
-                    ["mpg123", "-q", str(audio_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
-                )
-            return
-        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-            log.debug("Не удалось проиграть запись для %r, пробую espeak-ng", text)
+    if not relative_path or not shutil.which("mpg123"):
+        return False
+    try:
+        with resources.as_file(resources.files("audioreferent").joinpath(relative_path)) as audio_path:
+            if not audio_path.is_file():
+                log.warning("Нет файла записи %s для фразы %r", relative_path, text)
+                return False
+            subprocess.run(
+                ["mpg123", "-q", str(audio_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+            )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        log.debug("Не удалось проиграть запись для %r", text)
+        return False
+
+
+def speak(text: str, fallback: str | None = None) -> None:
+    """Озвучить text записью; если записи для него нет — записью fallback
+    (текст при этом всё равно виден в журнале). Синтез — только когда не
+    вышло ни то, ни другое."""
+    if _play_recorded(text):
+        return
+    if fallback and fallback != text and _play_recorded(fallback):
+        log.debug("Для фразы %r нет записи, озвучено как %r", text, fallback)
+        return
 
     if shutil.which("espeak-ng"):
         subprocess.run(["espeak-ng", "-v", "ru", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

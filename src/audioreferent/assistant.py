@@ -59,15 +59,13 @@ class Assistant:
         except actions.ActionError as exc:
             log.error("Не удалось выполнить действие %s (команда: %r): %s", match.spec.action, text, exc)
             if self.config.feedback.speech:
-                # Сообщение исключения озвучиваем как есть (не только
-                # заглушкой "Не удалось выполнить команду") — команды
-                # redmail_* поднимают ActionError с конкретной причиной
-                # ("Событие ... не найдено" и т.п.), и человеку полезнее
-                # услышать её, а не общую фразу. Три конкретных текста
-                # (в т.ч. эта заглушка) всё равно проигрываются заранее
-                # записанной речью (см. feedback._PRERECORDED_PHRASES),
-                # остальные — через espeak-ng, как и раньше.
-                feedback.speak(str(exc) or "Не удалось выполнить команду")
+                # Команды redmail_* поднимают ActionError с конкретной
+                # причиной из фиксированного набора фраз («Событие не
+                # найдено» и т.п.) — они озвучиваются записью того же
+                # голоса (feedback._PRERECORDED_PHRASES). Для текста, записи
+                # которого нет, звучит общее «Не удалось выполнить команду»,
+                # а сама причина остаётся в журнале выше.
+                feedback.speak(str(exc) or "Не удалось выполнить команду", fallback="Не удалось выполнить команду")
 
     def run(self) -> None:
         with microphone_stream(self.config.sample_rate, self.config.input_device) as chunks:
