@@ -26,15 +26,26 @@ _PRERECORDED_PHRASES = {
 }
 
 
+# paplay — из pulseaudio-utils; на РЭД ОС 8 со штатным PipeWire его может
+# не быть вовсе (стоит pipewire-pulseaudio, но не pulseaudio-utils), зато
+# есть pw-play из pipewire-utils — он тоже играет .oga.
+_PLAYERS = ["paplay", "pw-play"]
+
+
 def beep() -> None:
-    if shutil.which("paplay"):
+    for player in _PLAYERS:
+        if not shutil.which(player):
+            continue
         for path in _SOUND_CANDIDATES:
             try:
-                subprocess.run(["paplay", path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([player, path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return
             except (subprocess.CalledProcessError, FileNotFoundError):
                 continue
-    # Терминальный звонок как последний резерв — работает почти везде
+    # Терминальный звонок как последний резерв. В терминале он слышен, но
+    # внутри systemd-сервиса stdout уходит в журнал — звука нет, а в
+    # journalctl строка с этим байтом показывается как "[N B blob data]".
+    log.debug("Нет paplay/pw-play или системных звуков — звуковой сигнал недоступен")
     sys.stdout.write("\a")
     sys.stdout.flush()
 
