@@ -95,7 +95,7 @@ def save_config(cfg: Config) -> None:
     GUI-окно настроек, где пользователь одновременно видит и правит их
     все, и частичный merge только запутал бы происходящее."""
     USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    data = {
+    data: dict[str, Any] = {
         "wake_word": cfg.wake_word,
         "wake_word_fuzzy_threshold": cfg.wake_word_fuzzy_threshold,
         "input_device": cfg.input_device,
@@ -103,15 +103,32 @@ def save_config(cfg: Config) -> None:
         "sample_rate": cfg.sample_rate,
         "command_timeout_seconds": cfg.command_timeout_seconds,
         "feedback": {"sound": cfg.feedback.sound, "speech": cfg.feedback.speech},
-        "commands": [
-            {"phrases": c.phrases, "action": c.action, "args": c.args} for c in cfg.commands
-        ],
         "spk_model_path": cfg.spk_model_path,
         "voice_lock_enabled": cfg.voice_lock_enabled,
         "voice_lock_threshold": cfg.voice_lock_threshold,
     }
+    # Список команд пишем ТОЛЬКО если он отличается от умолчаний пакета.
+    # Иначе каждое «Сохранить» в GUI замораживало бы в пользовательском
+    # файле полный снимок команд на тот момент, и ни одна новая фраза из
+    # обновлённого пакета больше не подхватывалась бы (списки при загрузке
+    # не сливаются — пользовательский целиком заменяет умолчания).
+    commands = _commands_as_dicts(
+        [{"phrases": c.phrases, "action": c.action, "args": c.args} for c in cfg.commands]
+    )
+    if commands != _commands_as_dicts(_read_default_config().get("commands", [])):
+        data["commands"] = [
+            {"phrases": c.phrases, "action": c.action, "args": c.args} for c in cfg.commands
+        ]
     with open(USER_CONFIG_PATH, "w", encoding="utf-8") as fh:
         yaml.safe_dump(data, fh, allow_unicode=True, sort_keys=False)
+
+
+def _commands_as_dicts(commands: list[dict]) -> list[dict]:
+    """Нормализованный вид для сравнения: отсутствующий args == {}."""
+    return [
+        {"phrases": list(c.get("phrases", [])), "action": c.get("action"), "args": c.get("args") or {}}
+        for c in commands
+    ]
 
 
 def set_wake_word(word: str) -> None:
