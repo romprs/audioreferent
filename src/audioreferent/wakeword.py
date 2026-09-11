@@ -27,17 +27,34 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
-def contains_wake_word(text: str, wake_word: str, max_distance: int) -> bool:
-    """Ищет wake_word (одно или несколько слов) среди слов text, допуская
-    расстояние Левенштейна до max_distance на каждое слово окна."""
-    text_words = text.lower().split()
+def _find_wake_word(text_words: list[str], wake_word: str, max_distance: int) -> int | None:
+    """Индекс начала первого окна слов, нечётко совпавшего с wake_word,
+    либо None."""
     wake_words = wake_word.lower().split()
     window = len(wake_words)
     if window == 0 or len(text_words) < window:
-        return False
+        return None
     for start in range(len(text_words) - window + 1):
         candidate = text_words[start : start + window]
         total = sum(_levenshtein(c, w) for c, w in zip(candidate, wake_words))
         if total <= max_distance * window:
-            return True
-    return False
+            return start
+    return None
+
+
+def contains_wake_word(text: str, wake_word: str, max_distance: int) -> bool:
+    """Ищет wake_word (одно или несколько слов) среди слов text, допуская
+    расстояние Левенштейна до max_distance на каждое слово окна."""
+    return _find_wake_word(text.lower().split(), wake_word, max_distance) is not None
+
+
+def strip_wake_word(text: str, wake_word: str, max_distance: int) -> str | None:
+    """Текст без (первого) вхождения активационного слова — то, что человек
+    сказал помимо него в той же фразе. None — активационного слова в тексте
+    нет. Пустая строка — сказано было только оно."""
+    text_words = text.lower().split()
+    start = _find_wake_word(text_words, wake_word, max_distance)
+    if start is None:
+        return None
+    window = len(wake_word.split())
+    return " ".join(text_words[:start] + text_words[start + window :])

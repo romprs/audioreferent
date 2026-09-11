@@ -10,7 +10,7 @@ from .audio import microphone_stream
 from .commands import CommandRegistry
 from .config import Config
 from .recognizer import SpeechRecognizer, resolve_model_path, resolve_spk_model_path
-from .wakeword import contains_wake_word
+from .wakeword import contains_wake_word, strip_wake_word
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +120,17 @@ class Assistant:
                     # нужно ждать следующим высказыванием.
                     self.recognizer.reset()
                     if self.registry.match(final) is not None:
+                        self._on_command(final)
+                    elif strip_wake_word(
+                        final, self.config.wake_word, self.config.wake_word_fuzzy_threshold
+                    ):
+                        # Кроме активационного слова в фразе были и другие
+                        # слова ("вика привет"), но команды среди них нет —
+                        # это была попытка команды, а не одинокое
+                        # активационное слово. Молча ждать ещё одну фразу
+                        # здесь неправильно: человек так и не узнает, что
+                        # его не поняли. _on_command скажет
+                        # «Команда не распознана».
                         self._on_command(final)
                     else:
                         state = "active"
