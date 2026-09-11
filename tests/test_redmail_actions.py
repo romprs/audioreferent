@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from audioreferent import redmail_actions
 from audioreferent.actions import ActionError
-from audioreferent.redmail_client import RedmailError
+from audioreferent.redmail_client import RedmailError, RedmailNotRunning
 
 TODAY = date(2026, 9, 8)
 
@@ -30,9 +30,27 @@ def test_focus_calls_client():
 
 
 def test_focus_wraps_redmail_error():
-    with patch("audioreferent.redmail_actions._redmail_focus", side_effect=RedmailError("Почта не запущена")):
-        with pytest.raises(ActionError, match="Почта не запущена"):
+    with patch("audioreferent.redmail_actions._redmail_focus", side_effect=RedmailError("Канал занят")):
+        with pytest.raises(ActionError, match="Канал занят"):
             redmail_actions.redmail_focus({})
+
+
+def test_focus_launches_redmail_when_not_running():
+    with patch(
+        "audioreferent.redmail_actions._redmail_focus", side_effect=RedmailNotRunning("Почта не запущена")
+    ), patch("audioreferent.redmail_actions.launch_app") as mock_launch:
+        redmail_actions.redmail_focus({"candidates": ["redmail"]})  # не должно поднимать ActionError
+    mock_launch.assert_called_once_with({"candidates": ["redmail"]})
+
+
+def test_other_commands_launch_redmail_and_ask_to_repeat():
+    with patch(
+        "audioreferent.redmail_actions._redmail_create_event",
+        side_effect=RedmailNotRunning("Почта не запущена"),
+    ), patch("audioreferent.redmail_actions.launch_app") as mock_launch:
+        with pytest.raises(ActionError, match="повторите"):
+            redmail_actions.redmail_create_event({"remainder": "совещание завтра в десять"})
+    mock_launch.assert_called_once_with({"candidates": ["redmail"]})
 
 
 # ---------------------------------------------------------------------------

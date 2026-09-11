@@ -29,8 +29,15 @@ _TIMEOUT_SECONDS = 5.0
 class RedmailError(Exception):
     """Не получилось поговорить с redmail: не запущен, канал не поднят,
     либо сама команда на его стороне вернула ошибку (например, "Встреча с
-    UID ... не найдена"). Оба случая для вызывающего кода означают одно и
-    то же — "не получилось", различать их дальше незачем."""
+    UID ... не найдена"). Для вызывающего кода это "не получилось";
+    единственный случай, который он различает отдельно — RedmailNotRunning."""
+
+
+class RedmailNotRunning(RedmailError):
+    """redmail не запущен вовсе (нет файла адреса канала — redmail пишет
+    его при старте и убирает при выходе). Отдельный класс, потому что на
+    это есть осмысленная реакция — запустить почту, — а на прочие ошибки
+    связи нет."""
 
 
 def _redmail_config_dir() -> Path:
@@ -43,10 +50,10 @@ def _endpoint_address() -> str:
     try:
         data = json.loads(endpoint_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RedmailError("Почта не запущена") from exc
+        raise RedmailNotRunning("Почта не запущена") from exc
     value = data.get("full_server_name")
     if not isinstance(value, str) or not value:
-        raise RedmailError("Почта не запущена")
+        raise RedmailNotRunning("Почта не запущена")
     return value
 
 

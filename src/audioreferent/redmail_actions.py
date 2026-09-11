@@ -12,8 +12,8 @@ from datetime import datetime
 from typing import Any
 
 from . import ru_datetime
-from .actions import ActionError
-from .redmail_client import RedmailError
+from .actions import ActionError, launch_app
+from .redmail_client import RedmailError, RedmailNotRunning
 from .redmail_client import cancel_event as _redmail_cancel_event
 from .redmail_client import create_event as _redmail_create_event
 from .redmail_client import find_events as _redmail_find_events
@@ -38,15 +38,39 @@ def _local_hour_minute(iso_start: str) -> tuple[int, int]:
     return local.hour, local.minute
 
 
-def _find_single_event(subject: str, on_date: date_cls, hint_time: tuple[int, int] | None) -> dict:
+_DEFAULT_LAUNCH_CANDIDATES = ["redmail"]
+
+
+def _launch_redmail(args: dict[str, Any]) -> None:
+    """Запустить redmail, если он не запущен. Бинарники — из
+    args["candidates"] (см. default_config.yaml), как у launch_app."""
+    launch_app({"candidates": args.get("candidates", _DEFAULT_LAUNCH_CANDIDATES)})
+
+
+def _call(args: dict[str, Any], func, *call_args, **call_kwargs):
+    """Вызов функции IPC-клиента с переводом её ошибок в ActionError.
+
+    Если почта не запущена — запускаем её и просим повторить команду:
+    старт redmail (Qt + WebEngine) занимает несколько секунд, и держать
+    на это цикл прослушивания микрофона было бы хуже, чем попросить
+    сказать команду ещё раз."""
+    try:
+        return func(*call_args, **call_kwargs)
+    except RedmailNotRunning as exc:
+        _launch_redmail(args)
+        raise ActionError("Запускаю почту, повторите команду") from exc
+    except RedmailError as exc:
+        raise ActionError(str(exc)) from exc
+
+
+def _find_single_event(
+    args: dict[str, Any], subject: str, on_date: date_cls, hint_time: tuple[int, int] | None
+) -> dict:
     """Ищет ровно одно событие через find_events (тема-подстрока + день).
     Несколько совпадений сужаем по времени, если оно было названо; если
     неоднозначность так и не разрешилась — просим уточнить, а не гадаем,
     какое из событий переносить/отменять."""
-    try:
-        events = _redmail_find_events(subject=subject or None, date=on_date.isoformat())
-    except RedmailError as exc:
-        raise ActionError(str(exc)) from exc
+    events = _call(args, _redmail_find_events, subject=subject or None, date=on_date.isoformat())
     if not events:
         label = f"«{subject}»" if subject else "на эту дату"
         raise ActionError(f"Событие {label} не найдено")
@@ -59,9 +83,14 @@ def _find_single_event(subject: str, on_date: date_cls, hint_time: tuple[int, in
     return events[0]
 
 
-def redmail_focus(args: dict[str, Any]) -> None:  # noqa: ARG001
+def redmail_focus(args: dict[str, Any]) -> None:
+    """"открой почту": окно redmail на передний план, а если почта не
+    запущена — запустить её (для человека "открой почту" значит именно
+    это, а не "покажи уже открытое окно")."""
     try:
         _redmail_focus()
+    except RedmailNotRunning:
+        _launch_redmail(args)
     except RedmailError as exc:
         raise ActionError(str(exc)) from exc
 
@@ -81,10 +110,7 @@ def redmail_create_event(args: dict[str, Any]) -> None:
     if on_date is None:
         on_date = today
     start = f"{on_date.isoformat()}T{on_time[0]:02d}:{on_time[1]:02d}:00"
-    try:
-        _redmail_create_event(subject=subject, start=start, duration_minutes=60)
-    except RedmailError as exc:
-        raise ActionError(str(exc)) from exc
+    _call(args, _redmail_create_event, subject=subject, start=start, duration_minutes=60)
 
 
 def redmail_reschedule_event(args: dict[str, Any]) -> None:
@@ -110,12 +136,9 @@ def redmail_reschedule_event(args: dict[str, Any]) -> None:
     if old_date is None:
         old_date = today
 
-    event = _find_single_event(subject, old_date, old_time)
+    event = _find_single_event(args, subject, old_date, old_time)
     new_start = f"{new_date.isoformat()}T{new_time[0]:02d}:{new_time[1]:02d}:00"
-    try:
-        _redmail_update_event(event["uid"], start=new_start)
-    except RedmailError as exc:
-        raise ActionError(str(exc)) from exc
+    _call(args, _redmail_update_event, event["uid"], start=new_start)
 
 
 def redmail_cancel_event(args: dict[str, Any]) -> None:
@@ -125,11 +148,8 @@ def redmail_cancel_event(args: dict[str, Any]) -> None:
     subject, on_date, on_time = ru_datetime.extract(text, today=today)
     if on_date is None:
         on_date = today
-    event = _find_single_event(subject, on_date, on_time)
-    try:
-        _redmail_cancel_event(event["uid"])
-    except RedmailError as exc:
-        raise ActionError(str(exc)) from exc
+    event = _find_single_event(args, subject, on_date, on_time)
+    _call(args, _redmail_cancel_event, event["uid"])
 
 
 ACTIONS = {
