@@ -266,8 +266,11 @@ def _redmail_actions() -> dict[str, Any]:
     return redmail_actions.ACTIONS
 
 
-def execute(action: str, args: dict[str, Any], remainder: str = "") -> None:
+def execute(action: str, args: dict[str, Any], remainder: str = "") -> Any:
+    """Выполнить действие. Возвращает то, что вернул обработчик — почти
+    всегда None; исключение — redmail_event_form, который возвращает маркер
+    «открыта форма, переходи в режим заполнения» (см. assistant.py)."""
     handler = ACTIONS.get(action) or _redmail_actions().get(action)
     if handler is None:
         raise ActionError(f"Неизвестное действие: {action}")
-    handler({**args, "remainder": remainder})
+    return handler({**args, "remainder": remainder})

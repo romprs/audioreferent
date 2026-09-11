@@ -1,12 +1,17 @@
-"""Главный цикл: слушать активационное слово -> слушать команду -> выполнить."""
+"""Главный цикл: слушать активационное слово -> слушать команду -> выполнить.
+
+Плюс режим заполнения формы встречи (state == "form"): после "вика создай
+встречу" окно встречи redmail открыто, и фразы-поля ("тема планёрка",
+"участники шилкин", "сохранить") принимаются без активационного слова —
+см. redmail_actions.handle_form_phrase."""
 
 from __future__ import annotations
 
 import logging
 import time
 
-from . import actions, feedback, speaker
-from .audio import microphone_stream
+from . import actions, feedback, redmail_actions, speaker
+from .audio import ChunkStream, microphone_stream
 from .commands import CommandRegistry
 from .config import Config
 from .recognizer import SpeechRecognizer, resolve_model_path, resolve_spk_model_path
@@ -37,38 +42,95 @@ class Assistant:
         self.recognizer = SpeechRecognizer(
             model_path, config.sample_rate, spk_model_path=spk_model_path if self.speaker_verifier else None
         )
+        self._chunks: ChunkStream | None = None
+
+    # -- обратная связь -------------------------------------------------
+
+    def _speak(self, text: str, fallback: str | None = "Не удалось выполнить команду") -> None:
+        """Озвучить записью и выбросить эхо: пока ответ звучал в колонках,
+        микрофон писал его же — без сброса помощник «слышал» бы свои фразы,
+        а в режиме заполнения формы (без активационного слова) мог бы их и
+        выполнить."""
+        if not self.config.feedback.speech:
+            return
+        feedback.speak(text, fallback=fallback)
+        self._drop_echo()
+
+    def _beep(self, *, drop_echo: bool) -> None:
+        """Сигнал. drop_echo=False — для сигнала на активационное слово: он
+        звучит, пока человек ещё договаривает команду тем же дыханием, и
+        сброс очереди выкинул бы её первые слова."""
+        if not self.config.feedback.sound:
+            return
+        feedback.beep()
+        if drop_echo:
+            self._drop_echo()
+
+    def _drop_echo(self) -> None:
+        if self._chunks is not None:
+            dropped = self._chunks.drain()
+            if dropped:
+                log.debug("Сброшено %d чанков аудио, записанных во время ответа", dropped)
+        self.recognizer.reset()
+
+    # -- команды ---------------------------------------------------------
 
     def _on_wake(self) -> None:
         log.info("Активационное слово услышано")
-        if self.config.feedback.sound:
-            feedback.beep()
+        self._beep(drop_echo=False)
 
-    def _on_command(self, text: str) -> None:
+    def _on_command(self, text: str) -> bool:
+        """Выполнить команду. True — действие открыло форму встречи и пора в
+        режим заполнения."""
         log.info("Команда: %r", text)
         match = self.registry.match(text)
         if match is None:
             log.info("Команда не распознана как известная: %r", text)
-            if self.config.feedback.speech:
-                feedback.speak("Команда не распознана")
-            return
+            self._speak("Команда не распознана")
+            return False
         try:
-            actions.execute(match.spec.action, match.spec.args, remainder=match.remainder)
+            result = actions.execute(match.spec.action, match.spec.args, remainder=match.remainder)
             log.info("Выполнено действие %s (команда: %r)", match.spec.action, text)
-            if self.config.feedback.sound:
-                feedback.beep()
+            if getattr(result, "enter_form_mode", False):
+                log.info("Открыта форма встречи — режим заполнения (без активационного слова)")
+                self._speak("Слушаю", fallback=None)
+                self._beep(drop_echo=True)
+                return True
+            self._beep(drop_echo=True)
         except actions.ActionError as exc:
             log.error("Не удалось выполнить действие %s (команда: %r): %s", match.spec.action, text, exc)
-            if self.config.feedback.speech:
-                # Команды redmail_* поднимают ActionError с конкретной
-                # причиной из фиксированного набора фраз («Событие не
-                # найдено» и т.п.) — они озвучиваются записью того же
-                # голоса (feedback._PRERECORDED_PHRASES). Для текста, записи
-                # которого нет, звучит общее «Не удалось выполнить команду»,
-                # а сама причина остаётся в журнале выше.
-                feedback.speak(str(exc) or "Не удалось выполнить команду", fallback="Не удалось выполнить команду")
+            # Команды redmail_* поднимают ActionError с конкретной причиной
+            # из фиксированного набора фраз («Событие не найдено» и т.п.) —
+            # они озвучиваются записью того же голоса
+            # (feedback._PRERECORDED_PHRASES). Для текста, записи которого
+            # нет, звучит общее «Не удалось выполнить команду», а сама
+            # причина остаётся в журнале выше.
+            self._speak(str(exc) or "Не удалось выполнить команду")
+        return False
+
+    def _on_form_phrase(self, text: str) -> bool:
+        """Фраза в режиме заполнения. True — режим продолжается."""
+        reply = redmail_actions.handle_form_phrase(
+            text, wake_word=self.config.wake_word, fuzzy_threshold=self.config.wake_word_fuzzy_threshold
+        )
+        if not reply.handled:
+            log.info("В режиме заполнения не поле: %r", text)
+            return True
+        log.info("Поле формы: %r%s", text, f" -> {reply.spoken}" if reply.spoken else "")
+        if reply.spoken:
+            self._speak(reply.spoken)
+        else:
+            self._beep(drop_echo=True)
+        if reply.finished:
+            log.info("Режим заполнения окончен")
+            return False
+        return True
+
+    # -- главный цикл ------------------------------------------------------
 
     def run(self) -> None:
         with microphone_stream(self.config.sample_rate, self.config.input_device) as chunks:
+            self._chunks = chunks
             state = "idle"
             deadline = 0.0
             wake_alerted = False
@@ -103,8 +165,7 @@ class Assistant:
                         if not self.speaker_verifier.matches(vector):
                             similarity = self.speaker_verifier.best_similarity(vector) if vector else 0.0
                             log.info("Голос не похож на эталон (сходство %.2f) — игнорирую", similarity)
-                            if self.config.feedback.speech:
-                                feedback.speak("Голос не соответствует эталону")
+                            self._speak("Голос не соответствует эталону")
                             self.recognizer.reset()
                             continue
 
@@ -118,7 +179,9 @@ class Assistant:
                     # нужно ждать следующим высказыванием.
                     self.recognizer.reset()
                     if self.registry.match(final) is not None:
-                        self._on_command(final)
+                        if self._on_command(final):
+                            state = "form"
+                            deadline = time.monotonic() + self.config.form_timeout_seconds
                     elif strip_wake_word(
                         final, self.config.wake_word, self.config.wake_word_fuzzy_threshold
                     ):
@@ -142,6 +205,25 @@ class Assistant:
                     final = self.recognizer.accept_chunk(chunk)
                     if final is not None:
                         if final.strip():
-                            self._on_command(final)
-                            state = "idle"
+                            if self._on_command(final):
+                                state = "form"
+                                deadline = time.monotonic() + self.config.form_timeout_seconds
+                            else:
+                                state = "idle"
                         # пустой финальный результат (тишина) — продолжаем ждать до дедлайна
+                elif state == "form":
+                    if time.monotonic() > deadline:
+                        log.info("Режим заполнения формы: тишина %.0f с — выхожу (окно остаётся открытым)",
+                                 self.config.form_timeout_seconds)
+                        state = "idle"
+                        self.recognizer.reset()
+                        continue
+                    final = self.recognizer.accept_chunk(chunk)
+                    if final is None or not final.strip():
+                        continue
+                    log.info("Распознано (режим заполнения): %r", final)
+                    if self._on_form_phrase(final):
+                        deadline = time.monotonic() + self.config.form_timeout_seconds
+                    else:
+                        state = "idle"
+                    self.recognizer.reset()

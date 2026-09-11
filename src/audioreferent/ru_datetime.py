@@ -1,9 +1,14 @@
-"""Разбор дат и времени из русской речи — используется голосовыми командами
-redmail_* (например: "перенеси встречу совещание на десятое сентября в
-пятнадцать тридцать"). Здесь намеренно нет общего NLU, только грамматика,
-нужная для этой одной задачи: относительные даты
-("сегодня"/"завтра"/"послезавтра"), абсолютные "<день> <месяц> [<год>]" (день
-— цифрой или порядковым словом) и время "чч:мм"/"в X [часов] [Y [минут]]".
+"""Разбор дат, времени, длительности и повторения из русской речи — для
+голосовых команд redmail_* (например: "перенеси встречу совещание на
+десятое сентября в пятнадцать тридцать", "продолжительность два часа",
+"повторять каждую неделю"). Здесь намеренно нет общего NLU, только
+грамматика, нужная для этих команд.
+
+Даты: относительные ("сегодня"/"завтра"/"послезавтра", "в понедельник",
+"следующий вторник", "через неделю") и абсолютные "<день> <месяц> [<год>]"
+(день — цифрой или порядковым словом; год не назван — всегда текущий, так
+договорились с пользователем). Время: "в/на X [часов] [Y [минут]]" словами
+или цифрами, "полдень"/"полночь".
 
 Работает по уже нормализованному тексту (см. commands.normalize) — без
 знаков препинания, в нижнем регистре, слова разделены одним пробелом. Из-за
@@ -12,12 +17,11 @@ redmail_* (например: "перенеси встречу совещание
 
 from __future__ import annotations
 
-import re
 from datetime import date as date_cls
 from datetime import timedelta
 
 _UNITS = {
-    "ноль": 0, "один": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4,
+    "ноль": 0, "один": 1, "одна": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4,
     "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
 }
 _TEENS = {
@@ -53,6 +57,21 @@ _DAY_ORDINALS_BY_LENGTH = sorted(_DAY_ORDINALS.items(), key=lambda kv: -len(kv[0
 
 _RELATIVE_DAYS = {"послезавтра": 2, "завтра": 1, "сегодня": 0}
 
+# Дни недели во всех падежных формах, которые встречаются после "в"/"на"/
+# "следующий": понедельник/понедельника, среда/среду и т.п.
+_WEEKDAYS = {
+    0: ("понедельник", "понедельника", "понедельнику"),
+    1: ("вторник", "вторника", "вторнику"),
+    2: ("среда", "среду", "среды", "среде"),
+    3: ("четверг", "четверга", "четвергу"),
+    4: ("пятница", "пятницу", "пятницы", "пятнице"),
+    5: ("суббота", "субботу", "субботы", "субботе"),
+    6: ("воскресенье", "воскресенья", "воскресенью"),
+}
+_WEEKDAY_BY_WORD = {word: weekday for weekday, words in _WEEKDAYS.items() for word in words}
+_WEEKDAY_MODIFIERS = ("следующ", "ближайш", "будущ")
+_TIME_PREPOSITIONS = ("в", "во", "на")
+
 _HOUR_WORD_PREFIX = "час"
 _MINUTE_WORD_PREFIX = "минут"
 
@@ -79,22 +98,17 @@ def _number_from_words(words: list[str], start: int) -> tuple[int | None, int]:
 
 def _number_or_digit(words: list[str], start: int) -> tuple[int | None, int]:
     """То же самое, но сперва пробует прочитать голое числительное цифрой
-    (двух-трёхзначные токены полезны для ручного тестирования командой
+    (двузначные токены полезны для ручного тестирования командой
     audioreferent test-command, где проще напечатать "15", чем "пятнадцать")."""
     if start < len(words) and words[start].isdigit() and len(words[start]) <= 2:
         return int(words[start]), start + 1
     return _number_from_words(words, start)
 
 
-def _infer_year(today: date_cls, month: int, day: int) -> int:
-    """Год не назван — берём текущий, а если такая дата в этом году уже
-    прошла, значит имелся в виду следующий (переносить встречу "в прошлое"
-    было бы бессмысленно)."""
-    try:
-        candidate = date_cls(today.year, month, day)
-    except ValueError:
-        return today.year
-    return today.year if candidate >= today else today.year + 1
+def _year_for(today: date_cls, month: int, day: int) -> int:  # noqa: ARG001
+    """Год не назван — всегда текущий (так договорились: "дата — всегда
+    текущий год"). Перенос "в прошлое" отсечёт уже redmail при сохранении."""
+    return today.year
 
 
 def _match_date_tokens(
@@ -108,6 +122,26 @@ def _match_date_tokens(
         if word in _RELATIVE_DAYS:
             return today + timedelta(days=_RELATIVE_DAYS[word]), (i, i + 1)
 
+    # "через неделю" — ровно через семь дней
+    for i in range(n - 1):
+        if words[i] == "через" and words[i + 1] == "неделю":
+            return today + timedelta(days=7), (i, i + 2)
+
+    # "в понедельник", "следующий вторник", "в следующую среду" — ближайший
+    # такой день строго после сегодняшнего (сказанное в понедельник "в
+    # понедельник" — это через неделю, а не сегодня).
+    for i, word in enumerate(words):
+        weekday = _WEEKDAY_BY_WORD.get(word)
+        if weekday is None:
+            continue
+        start = i
+        if start > 0 and words[start - 1].startswith(_WEEKDAY_MODIFIERS):
+            start -= 1
+        if start > 0 and words[start - 1] in ("в", "во"):
+            start -= 1
+        ahead = (weekday - today.weekday()) % 7 or 7
+        return today + timedelta(days=ahead), (start, i + 1)
+
     for i, word in enumerate(words):
         if word.isdigit() and 1 <= len(word) <= 2 and i + 1 < n and words[i + 1] in _MONTHS:
             day = int(word)
@@ -117,7 +151,7 @@ def _match_date_tokens(
             if end < n and words[end].isdigit() and len(words[end]) == 4:
                 year = int(words[end])
                 end += 1
-            year = year if year is not None else _infer_year(today, month, day)
+            year = year if year is not None else _year_for(today, month, day)
             try:
                 return date_cls(year, month, day), (i, end)
             except ValueError:
@@ -134,7 +168,7 @@ def _match_date_tokens(
                 if end < n and words[end].isdigit() and len(words[end]) == 4:
                     year = int(words[end])
                     end += 1
-                year = year if year is not None else _infer_year(today, month, day)
+                year = year if year is not None else _year_for(today, month, day)
                 try:
                     return date_cls(year, month, day), (i, end)
                 except ValueError:
@@ -162,16 +196,20 @@ def _match_time_tokens(words: list[str]) -> tuple[tuple[int, int] | None, tuple[
                 return (hour, minute), (i, i + 1)
 
     for i, word in enumerate(words):
-        if word != "в":
+        if word not in _TIME_PREPOSITIONS:
             continue
         hour, nxt = _number_or_digit(words, i + 1)
         if hour is None or not (0 <= hour <= 23):
             continue
+        if nxt < n and words[nxt] in _MONTHS:
+            continue  # "на 15 сентября" — это дата, не время
         if nxt < n and words[nxt].startswith(_HOUR_WORD_PREFIX):
             nxt += 1
         minute, nxt2 = _number_or_digit(words, nxt)
         if minute is not None and 0 <= minute <= 59:
             end = nxt2
+            if end < n and words[end].startswith(_MINUTE_WORD_PREFIX):
+                end += 1
         else:
             minute = 0
             end = nxt
@@ -191,23 +229,91 @@ def parse_date(text: str, *, today: date_cls | None = None) -> date_cls | None:
 def parse_time(text: str) -> tuple[int, int] | None:
     """Время из текста: "15:00"/"15.00" (после normalize() — "1500"),
     "в 15 [часов] [30 [минут]]" смешанно и словами ("в пятнадцать
-    тридцать"), "полдень"/"полночь". None — времени в тексте нет."""
+    тридцать", "на восемь тридцать"), "полдень"/"полночь". None — времени
+    в тексте нет."""
     value, _span = _match_time_tokens(text.split())
     return value
 
 
 def extract(text: str, *, today: date_cls | None = None) -> tuple[str, date_cls | None, tuple[int, int] | None]:
     """Достаёт из текста дату и время; возвращает (остаток текста без них —
-    то, что дальше считается темой события, дата, время). Одинокий предлог
-    ("на"/"в"), оставшийся сразу перед вырезанным куском, тоже убирается."""
+    то, что дальше считается темой события, дата, время). Дата вырезается
+    первой, время ищется уже без неё — иначе "на 15 сентября" читалось бы
+    и как 15:00. Одинокий предлог ("на"/"в"), оставшийся сразу перед
+    вырезанным куском, тоже убирается."""
     today = today or date_cls.today()
     words = text.split()
     date_value, date_span = _match_date_tokens(words, today)
+    if date_span is not None:
+        del words[date_span[0] : date_span[1]]
     time_value, time_span = _match_time_tokens(words)
-
-    for start, end in sorted(filter(None, (date_span, time_span)), key=lambda s: -s[0]):
-        del words[start:end]
-    while words and words[-1] in ("на", "в"):
+    if time_span is not None:
+        del words[time_span[0] : time_span[1]]
+    while words and words[-1] in ("на", "в", "во"):
         words.pop()
 
     return " ".join(words).strip(), date_value, time_value
+
+
+def parse_duration(text: str) -> int | None:
+    """Длительность в минутах: "два часа", "полтора часа", "полчаса", "час",
+    "сорок пять минут", "два часа тридцать минут", "два с половиной часа".
+    None — не похоже на длительность."""
+    words = text.split()
+    if not words:
+        return None
+    if "полчаса" in words:
+        return 30
+    if "полтора" in words:
+        return 90
+
+    minutes: int | None = None
+    i = 0
+    n = len(words)
+    while i < n:
+        value, nxt = _number_or_digit(words, i)
+        if value is None:
+            if words[i].startswith(_HOUR_WORD_PREFIX):
+                # "час" без числа — один час
+                minutes = (minutes or 0) + 60
+                i += 1
+                continue
+            i += 1
+            continue
+        if nxt < n and words[nxt] == "с" and nxt + 1 < n and words[nxt + 1] == "половиной":
+            nxt += 2
+            minutes = (minutes or 0) + value * 60 + 30
+            if nxt < n and words[nxt].startswith(_HOUR_WORD_PREFIX):
+                nxt += 1
+            i = nxt
+            continue
+        if nxt < n and words[nxt].startswith(_HOUR_WORD_PREFIX):
+            minutes = (minutes or 0) + value * 60
+            i = nxt + 1
+            continue
+        if nxt < n and words[nxt].startswith(_MINUTE_WORD_PREFIX):
+            minutes = (minutes or 0) + value
+            i = nxt + 1
+            continue
+        i = nxt
+    return minutes if minutes else None
+
+
+_RECURRENCE_PHRASES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("нет", "не повторять", "без повторения", "без повторений", "однократно", "один раз"), "none"),
+    (("каждый день", "ежедневно", "по будням"), "daily"),
+    (("каждую неделю", "еженедельно", "раз в неделю", "каждой недели"), "weekly"),
+    (("каждый месяц", "ежемесячно", "раз в месяц"), "monthly"),
+    (("каждый год", "ежегодно", "раз в год"), "yearly"),
+)
+
+
+def parse_recurrence(text: str) -> str | None:
+    """"каждую неделю" -> "weekly" (значения — как у recurrence в
+    event_form_set redmail: none/daily/weekly/monthly/yearly). None —
+    не похоже ни на одно из известных повторений."""
+    padded = f" {text.strip()} "
+    for phrases, value in _RECURRENCE_PHRASES:
+        if any(f" {phrase} " in padded for phrase in phrases):
+            return value
+    return None

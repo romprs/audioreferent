@@ -51,6 +51,10 @@ class Config:
     spk_model_path: str | None = None
     voice_lock_enabled: bool = False
     voice_lock_threshold: float = 0.5
+    # Режим заполнения формы встречи (см. assistant.py): сколько секунд без
+    # фраз-полей держать режим, прежде чем выйти из него (окно при этом
+    # остаётся открытым — дозаполнить можно мышью).
+    form_timeout_seconds: float = 60
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -68,6 +72,7 @@ class Config:
             spk_model_path=data.get("spk_model_path"),
             voice_lock_enabled=data.get("voice_lock_enabled", False),
             voice_lock_threshold=data.get("voice_lock_threshold", 0.5),
+            form_timeout_seconds=data.get("form_timeout_seconds", 60),
         )
 
 
@@ -106,6 +111,7 @@ def save_config(cfg: Config) -> None:
         "spk_model_path": cfg.spk_model_path,
         "voice_lock_enabled": cfg.voice_lock_enabled,
         "voice_lock_threshold": cfg.voice_lock_threshold,
+        "form_timeout_seconds": cfg.form_timeout_seconds,
     }
     # Список команд пишем ТОЛЬКО если он отличается от умолчаний пакета.
     # Иначе каждое «Сохранить» в GUI замораживало бы в пользовательском

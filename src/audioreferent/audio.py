@@ -10,10 +10,36 @@ from contextlib import contextmanager
 import sounddevice as sd
 
 
+class ChunkStream:
+    """Итератор чанков PCM16 с микрофона плюс drain(): выбросить всё, что
+    накопилось в очереди, пока помощник был занят (проигрывал ответ).
+    Голосовой ответ идёт в колонки синхронно, микрофон в это время пишет
+    его эхо — без сброса помощник «слышал» бы собственные фразы (в журнале
+    это было видно как распознанное 'не удалось' после каждого ответа), а
+    в режиме заполнения формы, где активационное слово не нужно, мог бы и
+    выполнить их как команду."""
+
+    def __init__(self, audio_queue: queue.Queue[bytes]):
+        self._queue = audio_queue
+
+    def __iter__(self) -> Iterator[bytes]:
+        while True:
+            yield self._queue.get()
+
+    def drain(self) -> int:
+        dropped = 0
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return dropped
+            dropped += 1
+
+
 @contextmanager
 def microphone_stream(
     sample_rate: int, device: int | str | None, blocksize: int = 8000
-) -> Iterator[Iterator[bytes]]:
+) -> Iterator[ChunkStream]:
     """Контекстный менеджер: открывает поток с микрофона и отдаёт итератор
     сырых PCM16 mono чанков, пока поток открыт."""
 
@@ -31,12 +57,8 @@ def microphone_stream(
         callback=_callback,
     )
 
-    def _chunks() -> Iterator[bytes]:
-        while True:
-            yield audio_queue.get()
-
     with stream:
-        yield _chunks()
+        yield ChunkStream(audio_queue)
 
 
 def record_raw(sample_rate: int, device: int | str | None, duration_seconds: float) -> bytes:

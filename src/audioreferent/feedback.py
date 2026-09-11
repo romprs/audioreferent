@@ -36,6 +36,16 @@ _PRERECORDED_PHRASES = {
     "Событие не найдено": "voice/event_not_found.mp3",
     "Найдено несколько похожих событий, уточните тему": "voice/several_events.mp3",
     "Изменить можно только свою встречу": "voice/not_your_event.mp3",
+    # --- пошаговая форма встречи (redmail_actions.py, режим заполнения) ---
+    "Слушаю": "voice/listening.mp3",
+    "Не поняла дату": "voice/bad_date.mp3",
+    "Не поняла время": "voice/bad_time.mp3",
+    "Не поняла продолжительность": "voice/bad_duration.mp3",
+    "Не поняла повторение": "voice/bad_recurrence.mp3",
+    "Участник не найден": "voice/participant_not_found.mp3",
+    "Встреча сохранена": "voice/event_saved.mp3",
+    "Отменено": "voice/cancelled.mp3",
+    "Нельзя запланировать встречу на прошедшую дату": "voice/past_date.mp3",
 }
 
 

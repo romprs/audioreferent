@@ -131,6 +131,45 @@ def cancel_event(uid: str) -> None:
     send_request("cancel_event", {"uid": uid})
 
 
+# --- пошаговая форма встречи (event_form_* в redmail/ipc_server.py) ---
+#
+# Поля: subject, date (YYYY-MM-DD), time (HH:MM), start (ISO), duration_minutes,
+# recurrence (none/daily/weekly/monthly/yearly), participants / add_participants
+# (адреса), location, description, all_day. Открытая форма — обычное окно
+# встречи redmail на экране; «Сохранить»/«Отмена» нажимают event_form_save/
+# event_form_cancel, и сохранение идёт тем же путём, что и кнопка в окне.
+
+
+def event_form_open(*, uid: str | None = None, **fields: Any) -> dict:
+    args: dict[str, Any] = dict(fields)
+    if uid:
+        args["uid"] = uid
+    return send_request("event_form_open", args).get("form", {})
+
+
+def event_form_set(**fields: Any) -> dict:
+    return send_request("event_form_set", fields).get("form", {})
+
+
+def event_form_state() -> dict:
+    return send_request("event_form_state").get("form", {})
+
+
+def event_form_save() -> dict:
+    return send_request("event_form_save").get("form", {})
+
+
+def event_form_cancel() -> None:
+    send_request("event_form_cancel")
+
+
+def find_contacts(query: str) -> list[dict]:
+    """Контакты адресной книги по фамилии/имени, как их слышно в речи
+    (redmail сам сравнивает основы слов: «Шилкина» -> Шилкин)."""
+    contacts = send_request("find_contacts", {"query": query}).get("contacts", [])
+    return contacts if isinstance(contacts, list) else []
+
+
 def find_events(*, subject: str | None = None, date: str | None = None) -> list[dict]:
     args: dict[str, Any] = {}
     if subject:
