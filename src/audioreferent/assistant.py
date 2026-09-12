@@ -43,6 +43,11 @@ class Assistant:
             model_path, config.sample_rate, spk_model_path=spk_model_path if self.speaker_verifier else None
         )
         self._chunks: ChunkStream | None = None
+        # Движок голосового ответа (Silero) — фиксированные фразы
+        # синтезируются в фоне, пока грузится всё остальное.
+        if config.feedback.speech:
+            feedback.configure(config)
+            log.info("Голосовой ответ: %s", feedback.engine_name())
 
     # -- обратная связь -------------------------------------------------
 

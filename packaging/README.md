@@ -85,6 +85,32 @@ rpmbuild -ba ~/rpmbuild/SPECS/audioreferent.spec
 
 Готовый пакет появится в `~/rpmbuild/RPMS/<arch>/audioreferent-0.1.0-1*.rpm`.
 
+## Синтез речи Silero (`Source3` и torch)
+
+Голосовые ответы синтезирует Silero TTS (`src/audioreferent/tts.py`). Для
+этого в пакет входят модель `v4_ru.pt` (~40 МБ, `Source3`, кладётся в
+`/usr/share/audioreferent/silero/`) и CPU-сборка `torch` в venv (~700 МБ
+установленных файлов — пакет вырастает примерно на 200 МБ в сжатом виде).
+
+- Модель: `models.silero.ai` из сети РФ открывается не всегда — берите с
+  зеркала `https://huggingface.co/Derur/silero-models/resolve/main/tts/ru/ru_v4/v4_ru.pt`
+  (40 107 184 байт) и положите как `~/rpmbuild/SOURCES/v4_ru.pt`.
+- torch: спека ставит его из `https://download.pytorch.org/whl/cpu` (не с
+  PyPI — та сборка тянет CUDA на гигабайты). Если сборочная машина без
+  сети или большие закачки на ней рвутся, заранее скачайте колёса на любой
+  машине и положите в `~/rpmbuild/SOURCES/torch-wheels/` — спека возьмёт их:
+  ```bash
+  pip download torch --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple \
+      --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 \
+      --python-version 3.11 --only-binary=:all: -d torch-wheels
+  ```
+- Лицензия моделей Silero — CC BY-NC-SA 4.0 (некоммерческая); для
+  коммерческого распространения нужна лицензия от Silero.
+
+Без torch/модели помощник не ломается: `feedback.py` переходит на
+записанные фразы `voice/*.mp3`.
+
 ## Как подготовить архивы моделей (`Source1`/`Source2`)
 
 Нужны один раз (или заново — если меняется версия модели). `Source1` —

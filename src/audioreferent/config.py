@@ -92,6 +92,13 @@ class Config:
     # остаётся открытым — дозаполнить можно мышью).
     form_timeout_seconds: float = 60
     event_form: EventFormWords = field(default_factory=EventFormWords)
+    # Голосовой ответ: "silero" — синтез Silero TTS (см. tts.py; любой
+    # текст одним голосом, нужен torch и модель v4_ru.pt), "recordings" —
+    # только заранее записанные фразы (voice/*.mp3). При недоступности
+    # Silero помощник сам возвращается к записям.
+    tts_engine: str = "silero"
+    silero_model_path: str | None = None
+    silero_speaker: str = "xenia"
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -111,6 +118,9 @@ class Config:
             voice_lock_threshold=data.get("voice_lock_threshold", 0.5),
             form_timeout_seconds=data.get("form_timeout_seconds", 60),
             event_form=EventFormWords.from_dict(data.get("event_form")),
+            tts_engine=data.get("tts_engine", "silero"),
+            silero_model_path=data.get("silero_model_path"),
+            silero_speaker=data.get("silero_speaker", "xenia"),
         )
 
 
@@ -196,6 +206,9 @@ def save_config(cfg: Config) -> None:
         "voice_lock_enabled": cfg.voice_lock_enabled,
         "voice_lock_threshold": cfg.voice_lock_threshold,
         "form_timeout_seconds": cfg.form_timeout_seconds,
+        "tts_engine": cfg.tts_engine,
+        "silero_model_path": cfg.silero_model_path,
+        "silero_speaker": cfg.silero_speaker,
     }
     # Список команд пишем ТОЛЬКО если он отличается от умолчаний пакета.
     # Иначе каждое «Сохранить» в GUI замораживало бы в пользовательском

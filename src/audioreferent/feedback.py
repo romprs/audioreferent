@@ -93,10 +93,74 @@ def _play_recorded(text: str) -> bool:
         return False
 
 
+# --- движок синтеза (Silero, см. tts.py) ------------------------------
+#
+# Порядок озвучки в speak(): движок Silero (любой текст, один голос) ->
+# заранее записанная фраза -> записанный fallback -> espeak-ng. Движок
+# включается configure() из конфига (tts_engine: silero) и молча
+# отключается, если нет torch или файла модели, — тогда всё работает как
+# раньше, на записях.
+
+_engine = None  # tts.SileroEngine | None
+
+# Ударения, которые модель ставит неверно: «+» перед ударной гласной.
+_STRESSED = {
+    "Команда не распознана": "Команда не расп+ознана",
+}
+
+
+def configure(cfg) -> None:
+    """Подготовить движок по конфигу; фиксированные фразы синтезируются в
+    фоне заранее, чтобы первый ответ не ждал загрузки модели."""
+    global _engine
+    _engine = None
+    if getattr(cfg, "tts_engine", "recordings") != "silero":
+        return
+    from . import tts
+
+    model_path = tts.resolve_model_path(cfg.silero_model_path)
+    if not model_path:
+        log.warning("Синтез Silero включён, но модель v4_ru.pt не найдена — отвечаю записями")
+        return
+    if not tts.torch_available():
+        log.warning("Синтез Silero включён, но torch не установлен — отвечаю записями")
+        return
+    _engine = tts.SileroEngine(model_path, speaker=cfg.silero_speaker or tts.DEFAULT_SPEAKER)
+    _engine.warm_up([_STRESSED.get(text, text) for text in _PRERECORDED_PHRASES])
+
+
+def engine_name() -> str:
+    return "silero" if _engine is not None else "recordings"
+
+
+def _play_pcm(pcm: bytes, sample_rate: int) -> None:
+    """Проиграть PCM16 mono через устройство вывода по умолчанию. Через
+    sounddevice, а не внешний плеер: он уже есть в проекте, а stop() у
+    PortAudio дожидается, пока буфер доиграет, — хвост фразы не режется."""
+    import sounddevice as sd
+
+    with sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype="int16") as out:
+        out.write(pcm)
+
+
+def _speak_with_engine(text: str) -> bool:
+    if _engine is None:
+        return False
+    try:
+        pcm = _engine.synthesize(_STRESSED.get(text, text))
+        _play_pcm(pcm, _engine.sample_rate)
+        return True
+    except Exception as exc:  # noqa: BLE001 — любой сбой движка не должен ронять помощника
+        log.warning("Синтез Silero не удался для %r (%s) — пробую записи", text, exc)
+        return False
+
+
 def speak(text: str, fallback: str | None = None) -> None:
-    """Озвучить text записью; если записи для него нет — записью fallback
-    (текст при этом всё равно виден в журнале). Синтез — только когда не
-    вышло ни то, ни другое."""
+    """Озвучить text: движком Silero, если он настроен; иначе записью, а
+    если записи для него нет — записью fallback (текст при этом всё равно
+    виден в журнале). espeak-ng — только когда не вышло ничего."""
+    if _speak_with_engine(text):
+        return
     if _play_recorded(text):
         return
     if fallback and fallback != text and _play_recorded(fallback):

@@ -1,6 +1,6 @@
 Name:           audioreferent
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Голосовой помощник с командами на русском языке для РЭД ОС
 
 # Стандартное для РЭД ОС payload-сжатие (zstd) дало битый архив на одном
@@ -21,6 +21,10 @@ Source0:        %{name}-%{version}.tar.gz
 # (слишком большие для репозитория), см. packaging/README.md.
 Source1:        vosk-model-ru-0.42-noextras.tar.gz
 Source2:        vosk-model-spk-0.4.tar.gz
+# Модель синтеза речи Silero TTS (v4_ru, ~40 МБ, см. src/audioreferent/tts.py)
+# — с зеркала huggingface.co/Derur/silero-models (tts/ru/ru_v4/v4_ru.pt);
+# models.silero.ai из сети РФ открывается не всегда. Тоже в SOURCES/.
+Source3:        v4_ru.pt
 
 BuildRequires:  python3-devel
 BuildRequires:  python3-pip
@@ -81,6 +85,15 @@ mkdir -p %{buildroot}/opt/%{name}
 python3 -m venv --system-site-packages %{buildroot}/opt/%{name}/venv
 %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir --upgrade pip
 %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir %{_builddir}/%{name}-%{version}
+# torch для синтеза речи Silero — CPU-сборка с индекса PyTorch (обычная с
+# PyPI тянет CUDA на гигабайты). ~200 МБ колесо, ~700 МБ в venv. Если на
+# сборочной машине лежат заранее скачанные колёса в ~/rpmbuild/SOURCES/torch-wheels/
+# (см. packaging/README.md) — берём их без сети.
+if [ -d "%{_sourcedir}/torch-wheels" ]; then
+    %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir --no-index --find-links "%{_sourcedir}/torch-wheels" torch
+else
+    %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+fi
 
 # pip/venv записали в pyvenv.cfg и в шебанги venv/bin/* абсолютный путь
 # СБОРОЧНОГО буллрута — check-buildroot иначе ругается на утечку этого
@@ -109,6 +122,10 @@ mv %{buildroot}%{_datadir}/%{name}/vosk-model-ru-0.42 %{buildroot}%{_datadir}/%{
 tar xzf %{SOURCE2} -C %{buildroot}%{_datadir}/%{name}
 mv %{buildroot}%{_datadir}/%{name}/vosk-model-spk-0.4 %{buildroot}%{_datadir}/%{name}/vosk-model-spk
 
+# Модель синтеза речи Silero — по пути, который tts.py проверяет первым.
+mkdir -p %{buildroot}%{_datadir}/%{name}/silero
+install -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/%{name}/silero/v4_ru.pt
+
 mkdir -p %{buildroot}%{_userunitdir}
 install -m 0644 systemd/audioreferent.service %{buildroot}%{_userunitdir}/audioreferent.service
 
@@ -122,6 +139,7 @@ install -m 0644 packaging/audioreferent-settings.desktop %{buildroot}%{_datadir}
 %{_datadir}/applications/audioreferent-settings.desktop
 %{_datadir}/%{name}/vosk-model
 %{_datadir}/%{name}/vosk-model-spk
+%{_datadir}/%{name}/silero
 %doc README.md
 
 %post
@@ -130,6 +148,10 @@ echo "Изменить: audioreferent set-wakeword \"<слово>\""
 echo "Включить автозапуск: systemctl --user enable --now audioreferent.service"
 
 %changelog
+* Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-4
+- Голосовой ответ синтезом Silero TTS (голос xenia, модель v4_ru в пакете, torch в venv); записи — резерв
+- Слова формы встречи в конфиге и GUI; пользовательские команды сливаются с умолчаниями пакета; инфинитивы фраз
+
 * Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-3
 - Пошаговое голосовое заполнение открытой формы встречи redmail, поиск контактов по фамилии на слух
 - Ответы записанными фразами без синтеза; запуск приложений в отдельном юните; устаревший канал redmail считается «не запущен»

@@ -64,8 +64,24 @@ event_form:
 feedback:
   # Короткий звуковой сигнал при активации/распознавании команды
   sound: true
-  # Голосовой ответ через espeak-ng (если установлен)
+  # Голосовой ответ (движок — см. tts_engine ниже)
   speech: false
+
+# Чем озвучивать ответы при feedback.speech: true.
+#   silero     — синтез Silero TTS (офлайн, один женский голос, любой текст;
+#                нужны torch и модель v4_ru.pt — RPM кладёт её в
+#                /usr/share/audioreferent/silero/). Ударения в проблемных
+#                словах задаются в коде знаком "+" (feedback._STRESSED).
+#   recordings — только заранее записанные фразы из voice/*.mp3; для текста
+#                без записи звучит общее «Не удалось выполнить команду».
+# Если Silero выбран, но недоступен (нет torch/модели), помощник сам
+# переходит на записи, а причина пишется в журнал.
+tts_engine: silero
+# null = искать модель в /usr/share/audioreferent/silero/v4_ru.pt и
+# ~/.local/share/audioreferent/v4_ru.pt
+silero_model_path: null
+# Голоса v4_ru: xenia, baya, kseniya (женские), aidar, eugene (мужские)
+silero_speaker: xenia
 
 commands:
   - phrases: ["открой браузер", "запусти браузер"]

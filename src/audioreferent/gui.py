@@ -204,11 +204,42 @@ class SettingsWindow(QMainWindow):
         box = QGroupBox("Обратная связь")
         layout = QHBoxLayout(box)
         self.sound_check = QCheckBox("Звуковой сигнал")
-        self.speech_check = QCheckBox("Голосовой ответ (espeak-ng)")
+        self.speech_check = QCheckBox("Голосовой ответ")
         layout.addWidget(self.sound_check)
         layout.addWidget(self.speech_check)
+
+        layout.addSpacing(16)
+        layout.addWidget(QLabel("Движок:"))
+        self.tts_engine_combo = QComboBox()
+        self.tts_engine_combo.addItem("Silero (синтез, любой текст)", "silero")
+        self.tts_engine_combo.addItem("Записанные фразы (voice/*.mp3)", "recordings")
+        layout.addWidget(self.tts_engine_combo)
+        layout.addWidget(QLabel("Голос:"))
+        self.tts_speaker_combo = QComboBox()
+        from .tts import SPEAKERS
+
+        self.tts_speaker_combo.addItems(SPEAKERS)
+        layout.addWidget(self.tts_speaker_combo)
+        test_btn = QPushButton("Проверить голос")
+        test_btn.setToolTip("Озвучить пробную фразу выбранным движком и голосом (без сохранения)")
+        test_btn.clicked.connect(self._on_test_voice)
+        layout.addWidget(test_btn)
         layout.addStretch(1)
         return box
+
+    def _on_test_voice(self) -> None:
+        from . import feedback
+
+        cfg = config.Config.from_dict(config._read_default_config())
+        cfg.tts_engine = self.tts_engine_combo.currentData()
+        cfg.silero_speaker = self.tts_speaker_combo.currentText()
+        cfg.silero_model_path = self.cfg.silero_model_path
+        try:
+            feedback.configure(cfg)
+            feedback.speak("Команда не распознана")
+            QMessageBox.information(self, "Проверка голоса", f"Озвучено движком: {feedback.engine_name()}")
+        except Exception as exc:  # noqa: BLE001 — показать пользователю, а не уронить окно
+            QMessageBox.warning(self, "Проверка голоса", str(exc))
 
     def _build_commands_group(self) -> QGroupBox:
         box = QGroupBox("Команды")
@@ -314,6 +345,10 @@ class SettingsWindow(QMainWindow):
         self.timeout_spin.setValue(cfg.command_timeout_seconds)
         self.sound_check.setChecked(cfg.feedback.sound)
         self.speech_check.setChecked(cfg.feedback.speech)
+        engine_idx = self.tts_engine_combo.findData(cfg.tts_engine)
+        self.tts_engine_combo.setCurrentIndex(engine_idx if engine_idx >= 0 else 0)
+        speaker_idx = self.tts_speaker_combo.findText(cfg.silero_speaker)
+        self.tts_speaker_combo.setCurrentIndex(speaker_idx if speaker_idx >= 0 else 0)
 
         device_idx = self.device_combo.findData(cfg.input_device)
         self.device_combo.setCurrentIndex(device_idx if device_idx >= 0 else 0)
@@ -554,6 +589,9 @@ class SettingsWindow(QMainWindow):
             voice_lock_threshold=self.voice_threshold_spin.value(),
             form_timeout_seconds=self.cfg.form_timeout_seconds,
             event_form=self._collect_event_form_words(),
+            tts_engine=self.tts_engine_combo.currentData(),
+            silero_model_path=self.cfg.silero_model_path,
+            silero_speaker=self.tts_speaker_combo.currentText(),
         )
         config.save_config(cfg)
         self.cfg = cfg

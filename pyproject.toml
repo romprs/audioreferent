@@ -13,6 +13,11 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.optional-dependencies]
+# Синтез речи Silero (tts.py). CPU-сборку torch ставить с индекса
+# https://download.pytorch.org/whl/cpu — обычная тянет CUDA на гигабайты.
+tts = ["torch>=2.1"]
+
 [project.scripts]
 audioreferent = "audioreferent.cli:main"
 
