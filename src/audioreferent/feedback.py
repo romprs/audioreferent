@@ -109,9 +109,14 @@ _STRESSED = {
 }
 
 
-def configure(cfg) -> None:
+def configure(cfg, *, warm_up: bool = True) -> None:
     """Подготовить движок по конфигу; фиксированные фразы синтезируются в
-    фоне заранее, чтобы первый ответ не ждал загрузки модели."""
+    фоне заранее, чтобы первый ответ не ждал загрузки модели.
+
+    warm_up=False — для разовых вызовов (audioreferent say, кнопка
+    «Проверить голос»): фоновый поток с torch, живущий на момент выхода
+    из процесса, роняет его с «terminate called without an active
+    exception»."""
     global _engine
     _engine = None
     if getattr(cfg, "tts_engine", "recordings") != "silero":
@@ -126,7 +131,8 @@ def configure(cfg) -> None:
         log.warning("Синтез Silero включён, но torch не установлен — отвечаю записями")
         return
     _engine = tts.SileroEngine(model_path, speaker=cfg.silero_speaker or tts.DEFAULT_SPEAKER)
-    _engine.warm_up([_STRESSED.get(text, text) for text in _PRERECORDED_PHRASES])
+    if warm_up:
+        _engine.warm_up([_STRESSED.get(text, text) for text in _PRERECORDED_PHRASES])
 
 
 def engine_name() -> str:

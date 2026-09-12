@@ -235,7 +235,7 @@ class SettingsWindow(QMainWindow):
         cfg.silero_speaker = self.tts_speaker_combo.currentText()
         cfg.silero_model_path = self.cfg.silero_model_path
         try:
-            feedback.configure(cfg)
+            feedback.configure(cfg, warm_up=False)
             feedback.speak("Команда не распознана")
             QMessageBox.information(self, "Проверка голоса", f"Озвучено движком: {feedback.engine_name()}")
         except Exception as exc:  # noqa: BLE001 — показать пользователю, а не уронить окно

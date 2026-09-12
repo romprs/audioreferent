@@ -44,7 +44,7 @@ def _cmd_say(args: argparse.Namespace) -> int:
     cfg = config.load_config()
     if args.speaker:
         cfg.silero_speaker = args.speaker
-    feedback.configure(cfg)
+    feedback.configure(cfg, warm_up=False)
     print(f"Движок: {feedback.engine_name()}")
     feedback.speak(args.text, fallback=None)
     return 0
