@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from . import ru_datetime
 from .actions import ActionError, launch_app
+from .config import EventFormWords
 from .redmail_client import RedmailError, RedmailNotRunning
 from .redmail_client import cancel_event as _redmail_cancel_event
 from .redmail_client import create_event as _redmail_create_event
@@ -209,28 +210,26 @@ class FormReply:
     finished: bool = False  # режим заполнения окончен (сохранено/отменено/окно закрыто)
 
 
-_FIELD_KEYWORDS = {
-    "тема": "subject",
-    "название": "subject",
-    "дата": "date",
-    "число": "date",
-    "время": "time",
-    "начало": "time",
-    "продолжительность": "duration",
-    "длительность": "duration",
-    "повторение": "recurrence",
-    "повторять": "recurrence",
-    "повтор": "recurrence",
-    "участники": "participants",
-    "участник": "participants",
-    "пригласить": "participants",
-    "пригласи": "participants",
-    "место": "location",
-    "описание": "description",
-}
-_SAVE_WORDS = ("сохранить", "сохрани")
-_CANCEL_WORDS = ("отменить", "отмени", "отмена")
 _PARTICIPANT_FILLERS = ("и", "а", "также", "ещё", "еще")
+
+
+def _default_form_words() -> EventFormWords:
+    """Слова полей из default_config.yaml пакета — когда вызывающая сторона
+    не передала свои (тесты, test-command)."""
+    from .config import _read_default_config
+
+    return EventFormWords.from_dict(_read_default_config().get("event_form"))
+
+
+def _keyword_map(words: EventFormWords) -> dict[str, str]:
+    """"тема" -> "subject", "пригласить" -> "participants", ... — по словам
+    из конфига (GUI, таблица «Форма встречи»)."""
+    return {
+        keyword.lower(): field
+        for field, keywords in words.fields.items()
+        for keyword in keywords
+        if keyword
+    }
 
 
 def redmail_event_form(args: dict[str, Any]) -> FormSession:
@@ -259,28 +258,33 @@ def _form_closed(exc: RedmailError) -> bool:
     return isinstance(exc, RedmailNotRunning) or "не открыта" in str(exc)
 
 
-def handle_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int) -> FormReply:
+def handle_form_phrase(
+    text: str, *, wake_word: str, fuzzy_threshold: int, words: EventFormWords | None = None
+) -> FormReply:
     """Одна фраза в режиме заполнения (текст уже нормализован). Активационное
-    слово в начале допускается, но не требуется."""
+    слово в начале допускается, но не требуется. words — ключевые слова
+    полей из конфига (Config.event_form); None — умолчания пакета."""
+    form_words = words if words is not None and words.fields else _default_form_words()
+    keyword_map = _keyword_map(form_words)
     stripped = strip_wake_word(text, wake_word, fuzzy_threshold)
     if stripped is not None:
         text = stripped
-    words = text.split()
-    if not words:
+    tokens = text.split()
+    if not tokens:
         return FormReply(handled=False)
-    first = words[0]
-    rest_words = words[1:]
+    first = tokens[0]
+    rest_words = tokens[1:]
     rest = " ".join(rest_words)
 
     try:
-        if first in _SAVE_WORDS:
+        if first in form_words.save:
             _redmail_event_form_save()
             return FormReply(handled=True, spoken="Встреча сохранена", finished=True)
-        if first in _CANCEL_WORDS:
+        if first in form_words.cancel:
             _redmail_event_form_cancel()
             return FormReply(handled=True, spoken="Отменено", finished=True)
 
-        field = _FIELD_KEYWORDS.get(first)
+        field = keyword_map.get(first)
         if field is None:
             return FormReply(handled=False)
         if field == "participants":
@@ -353,7 +357,10 @@ def _set_participants(name_words: list[str]) -> FormReply:
 
 ACTIONS = {
     "redmail_focus": redmail_focus,
-    "redmail_create_event": redmail_create_event,
+    # Старое имя действия "создай встречу" — теперь это та же пошаговая
+    # форма: конфиги, сохранённые из GUI до появления формы, продолжают
+    # работать (и получают режим заполнения), а не просят назвать тему.
+    "redmail_create_event": redmail_event_form,
     "redmail_event_form": redmail_event_form,
     "redmail_reschedule_event": redmail_reschedule_event,
     "redmail_cancel_event": redmail_cancel_event,

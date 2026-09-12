@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import sounddevice as sd
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, Qt
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -94,6 +94,7 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(self._build_voice_lock_group())
         layout.addWidget(self._build_feedback_group())
         layout.addWidget(self._build_commands_group(), stretch=1)
+        layout.addWidget(self._build_event_form_group())
         layout.addLayout(self._build_buttons())
         return tab
 
@@ -232,6 +233,63 @@ class SettingsWindow(QMainWindow):
 
         return box
 
+    def _build_event_form_group(self) -> QGroupBox:
+        """Слова режима заполнения формы встречи — после «создай встречу»
+        окно redmail открыто, и фразы принимаются без активационного слова:
+        первое слово выбирает поле, остальное — значение; «Сохранить»/
+        «Отменить» — отдельные слова. Строки фиксированы (это поля окна),
+        правятся только слова."""
+        box = QGroupBox("Форма встречи (после «создай / измени встречу», без активационного слова)")
+        layout = QVBoxLayout(box)
+        hint = QLabel(
+            "Первое слово фразы — поле, остальное — значение: «тема планёрка», «дата следующий "
+            "понедельник», «время восемь тридцать», «продолжительность два часа», «повторение каждую "
+            "неделю», «участники шилкин пономарёв» (по фамилии из адресной книги), «место …», «описание …». "
+            "Отдельно: «сохранить» / «отменить»."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        rows = config.EVENT_FORM_FIELDS + [("save", "Сохранить (нажать кнопку)"), ("cancel", "Отменить (нажать кнопку)")]
+        self.event_form_table = QTableWidget(len(rows), 2)
+        self.event_form_table.setHorizontalHeaderLabels(["Поле", "Слова (через ;)"])
+        self.event_form_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.event_form_table.verticalHeader().setVisible(False)
+        self.event_form_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._event_form_keys = [key for key, _label in rows]
+        for row, (key, label) in enumerate(rows):
+            label_item = QTableWidgetItem(label)
+            label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
+            label_item.setData(Qt.UserRole, key)
+            self.event_form_table.setItem(row, 0, label_item)
+            self.event_form_table.setItem(row, 1, QTableWidgetItem(""))
+        self.event_form_table.setMaximumHeight(self.event_form_table.verticalHeader().defaultSectionSize() * (len(rows) + 1) + 8)
+        layout.addWidget(self.event_form_table)
+        return box
+
+    def _load_event_form_words(self, words: config.EventFormWords) -> None:
+        for row, key in enumerate(self._event_form_keys):
+            if key == "save":
+                values = words.save
+            elif key == "cancel":
+                values = words.cancel
+            else:
+                values = words.fields.get(key, [])
+            self.event_form_table.item(row, 1).setText("; ".join(values))
+
+    def _collect_event_form_words(self) -> config.EventFormWords:
+        result = config.EventFormWords()
+        for row, key in enumerate(self._event_form_keys):
+            item = self.event_form_table.item(row, 1)
+            values = [w.strip().lower() for w in (item.text() if item else "").split(";") if w.strip()]
+            if key == "save":
+                result.save = values
+            elif key == "cancel":
+                result.cancel = values
+            else:
+                result.fields[key] = values
+        return result
+
     def _build_buttons(self) -> QHBoxLayout:
         row = QHBoxLayout()
         self.status_label = QLabel("")
@@ -267,6 +325,7 @@ class SettingsWindow(QMainWindow):
         self.commands_table.setRowCount(0)
         for spec in cfg.commands:
             self._add_command_row(spec.phrases, spec.action, spec.args)
+        self._load_event_form_words(cfg.event_form)
 
     def _add_command_row(
         self, phrases: list[str] | None = None, action: str | None = None, args: dict[str, Any] | None = None
@@ -278,7 +337,9 @@ class SettingsWindow(QMainWindow):
 
         action_combo = QComboBox()
         action_combo.setEditable(True)
-        action_combo.addItems(sorted(actions.ACTIONS.keys()))
+        # Локальные действия плюс действия redmail (они подключаются в
+        # actions.execute лениво и в actions.ACTIONS не входят).
+        action_combo.addItems(sorted(set(actions.ACTIONS) | set(actions._redmail_actions())))
         if action:
             idx = action_combo.findText(action)
             if idx >= 0:
@@ -491,6 +552,8 @@ class SettingsWindow(QMainWindow):
             spk_model_path=self.cfg.spk_model_path,
             voice_lock_enabled=self.voice_lock_check.isChecked(),
             voice_lock_threshold=self.voice_threshold_spin.value(),
+            form_timeout_seconds=self.cfg.form_timeout_seconds,
+            event_form=self._collect_event_form_words(),
         )
         config.save_config(cfg)
         self.cfg = cfg

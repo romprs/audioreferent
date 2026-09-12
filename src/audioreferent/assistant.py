@@ -111,7 +111,10 @@ class Assistant:
     def _on_form_phrase(self, text: str) -> bool:
         """Фраза в режиме заполнения. True — режим продолжается."""
         reply = redmail_actions.handle_form_phrase(
-            text, wake_word=self.config.wake_word, fuzzy_threshold=self.config.wake_word_fuzzy_threshold
+            text,
+            wake_word=self.config.wake_word,
+            fuzzy_threshold=self.config.wake_word_fuzzy_threshold,
+            words=self.config.event_form,
         )
         if not reply.handled:
             log.info("В режиме заполнения не поле: %r", text)

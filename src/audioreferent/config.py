@@ -38,6 +38,42 @@ class CommandSpec:
     args: dict[str, Any] = field(default_factory=dict)
 
 
+#: Поля формы встречи в том порядке, в каком они показываются в GUI, и их
+#: подписи. Ключи — те же, что в default_config.yaml (event_form.fields) и в
+#: redmail_actions.handle_form_phrase.
+EVENT_FORM_FIELDS: list[tuple[str, str]] = [
+    ("subject", "Тема"),
+    ("date", "Дата"),
+    ("time", "Время"),
+    ("duration", "Продолжительность"),
+    ("recurrence", "Повторение"),
+    ("participants", "Участники"),
+    ("location", "Место"),
+    ("description", "Описание"),
+]
+
+
+@dataclass
+class EventFormWords:
+    """Ключевые слова режима заполнения формы встречи: первое слово фразы
+    выбирает поле ("тема планёрка", "дата завтра"), отдельные слова —
+    «Сохранить»/«Отменить». Видны и правятся в GUI (таблица «Форма
+    встречи»), как и обычные команды."""
+
+    fields: dict[str, list[str]] = field(default_factory=dict)
+    save: list[str] = field(default_factory=list)
+    cancel: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "EventFormWords":
+        data = data or {}
+        fields = {key: list(words or []) for key, words in (data.get("fields") or {}).items()}
+        return cls(fields=fields, save=list(data.get("save") or []), cancel=list(data.get("cancel") or []))
+
+    def to_dict(self) -> dict:
+        return {"fields": {k: list(v) for k, v in self.fields.items()}, "save": list(self.save), "cancel": list(self.cancel)}
+
+
 @dataclass
 class Config:
     wake_word: str
@@ -55,6 +91,7 @@ class Config:
     # фраз-полей держать режим, прежде чем выйти из него (окно при этом
     # остаётся открытым — дозаполнить можно мышью).
     form_timeout_seconds: float = 60
+    event_form: EventFormWords = field(default_factory=EventFormWords)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -73,6 +110,7 @@ class Config:
             voice_lock_enabled=data.get("voice_lock_enabled", False),
             voice_lock_threshold=data.get("voice_lock_threshold", 0.5),
             form_timeout_seconds=data.get("form_timeout_seconds", 60),
+            event_form=EventFormWords.from_dict(data.get("event_form")),
         )
 
 
@@ -86,10 +124,56 @@ def _read_default_config() -> dict:
     return yaml.safe_load(text) or {}
 
 
+def _merge_commands(defaults: list[dict], user: list[dict] | None) -> list[dict]:
+    """Пользовательский список команд — правки ПОВЕРХ умолчаний пакета, а не
+    замена их целиком.
+
+    Раньше список из пользовательского файла подменял умолчания полностью:
+    стоило один раз сохранить команды из GUI — и ни новая фраза, ни новое
+    действие из обновлённого пакета больше не подхватывались, а старое
+    действие («создай встречу» -> redmail_create_event) жило в конфиге
+    вечно. Теперь: команда пользователя с тем же action и args, что у
+    умолчания, дополняет его фразы (объединение — свои фразы остаются, новые
+    из пакета добавляются); команды пользователя без пары в умолчаниях
+    добавляются в конец; умолчания, которых пользователь не трогал,
+    остаются. Удалить умолчание насовсем этим способом нельзя — сознательно:
+    обновляемость важнее, а редкие «выключи эту команду» проще решить
+    отдельным списком, если понадобится."""
+    if not user:
+        return list(defaults)
+    result: list[dict] = []
+    used: set[int] = set()
+    for default in defaults:
+        pair = next(
+            (
+                index
+                for index, cmd in enumerate(user)
+                if index not in used
+                and cmd.get("action") == default.get("action")
+                and (cmd.get("args") or {}) == (default.get("args") or {})
+            ),
+            None,
+        )
+        if pair is None:
+            result.append(default)
+            continue
+        used.add(pair)
+        merged = dict(user[pair])
+        phrases = list(user[pair].get("phrases") or [])
+        phrases += [p for p in default.get("phrases", []) if p not in phrases]
+        merged["phrases"] = phrases
+        result.append(merged)
+    result.extend(cmd for index, cmd in enumerate(user) if index not in used)
+    return result
+
+
 def load_config() -> Config:
-    data = _read_default_config()
+    defaults = _read_default_config()
+    data = defaults
     if USER_CONFIG_PATH.exists():
-        data = _deep_merge(data, _read_yaml(USER_CONFIG_PATH))
+        user = _read_yaml(USER_CONFIG_PATH)
+        data = _deep_merge(defaults, user)
+        data["commands"] = _merge_commands(defaults.get("commands", []), user.get("commands"))
     return Config.from_dict(data)
 
 
@@ -121,10 +205,14 @@ def save_config(cfg: Config) -> None:
     commands = _commands_as_dicts(
         [{"phrases": c.phrases, "action": c.action, "args": c.args} for c in cfg.commands]
     )
-    if commands != _commands_as_dicts(_read_default_config().get("commands", [])):
+    defaults = _read_default_config()
+    if commands != _commands_as_dicts(defaults.get("commands", [])):
         data["commands"] = [
             {"phrases": c.phrases, "action": c.action, "args": c.args} for c in cfg.commands
         ]
+    # Слова формы встречи — по тому же правилу: только если правлены.
+    if cfg.event_form.to_dict() != EventFormWords.from_dict(defaults.get("event_form")).to_dict():
+        data["event_form"] = cfg.event_form.to_dict()
     with open(USER_CONFIG_PATH, "w", encoding="utf-8") as fh:
         yaml.safe_dump(data, fh, allow_unicode=True, sort_keys=False)
 
