@@ -85,30 +85,32 @@ rpmbuild -ba ~/rpmbuild/SPECS/audioreferent.spec
 
 Готовый пакет появится в `~/rpmbuild/RPMS/<arch>/audioreferent-0.1.0-1*.rpm`.
 
-## Синтез речи Silero (`Source3` и torch)
+## Синтез речи Piper (`Source3`–`Source7`)
 
-Голосовые ответы синтезирует Silero TTS (`src/audioreferent/tts.py`). Для
-этого в пакет входят модель `v4_ru.pt` (~40 МБ, `Source3`, кладётся в
-`/usr/share/audioreferent/silero/`) и CPU-сборка `torch` в venv (~700 МБ
-установленных файлов — пакет вырастает примерно на 200 МБ в сжатом виде).
+Голосовые ответы синтезирует Piper TTS (`src/audioreferent/tts.py`):
+внешняя программа `piper` (бинарная сборка rhasspy/piper, MIT; внутри
+onnxruntime и данные espeak-ng, ~20 МБ) и файлы голосов (~63 МБ каждый).
+В пакет кладутся программа в `/opt/audioreferent/piper/` и голоса в
+`/usr/share/audioreferent/piper/`. Положите в `~/rpmbuild/SOURCES/`:
 
-- Модель: `models.silero.ai` из сети РФ открывается не всегда — берите с
-  зеркала `https://huggingface.co/Derur/silero-models/resolve/main/tts/ru/ru_v4/v4_ru.pt`
-  (40 107 184 байт) и положите как `~/rpmbuild/SOURCES/v4_ru.pt`.
-- torch: спека ставит его из `https://download.pytorch.org/whl/cpu` (не с
-  PyPI — та сборка тянет CUDA на гигабайты). Если сборочная машина без
-  сети или большие закачки на ней рвутся, заранее скачайте колёса на любой
-  машине и положите в `~/rpmbuild/SOURCES/torch-wheels/` — спека возьмёт их:
-  ```bash
-  pip download torch --index-url https://download.pytorch.org/whl/cpu \
-      --extra-index-url https://pypi.org/simple \
-      --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 \
-      --python-version 3.11 --only-binary=:all: -d torch-wheels
-  ```
-- Лицензия моделей Silero — CC BY-NC-SA 4.0 (некоммерческая); для
-  коммерческого распространения нужна лицензия от Silero.
+```bash
+cd ~/rpmbuild/SOURCES
+curl -LO https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz
+for v in denis dmitri; do for ext in onnx onnx.json; do
+  curl -LO "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/$v/medium/ru_RU-$v-medium.$ext"
+done; done
+```
 
-Без torch/модели помощник не ломается: `feedback.py` переходит на
+Лицензии: программа Piper — MIT (именно сборка 2023.11.14; Python-пакет
+`piper-tts` новее 1.2 — GPL, поэтому он не используется); голоса
+`ru_RU-denis-medium` и `ru_RU-dmitri-medium` — CC0. Женский голос
+`ru_RU-irina-medium` обучен на данных RHVoice, а голоса RHVoice — CC BY-NC-ND
+4.0: в продукт его можно включать только с письменного разрешения RHVoice
+Lab (rhvoice@rhvoice.org / rhvoice@tiflo.org). Пока разрешения нет, irina в
+пакет не кладётся; положенный вручную в `/usr/share/audioreferent/piper/`
+файл подхватится настройкой `piper_voice`.
+
+Без программы/голоса помощник не ломается: `feedback.py` переходит на
 записанные фразы `voice/*.mp3`.
 
 ## Как подготовить архивы моделей (`Source1`/`Source2`)

@@ -37,13 +37,13 @@ def _cmd_settings(args: argparse.Namespace) -> int:  # noqa: ARG001
 
 
 def _cmd_say(args: argparse.Namespace) -> int:
-    """Озвучить текст тем же путём, что и помощник (движок Silero либо
+    """Озвучить текст тем же путём, что и помощник (движок Piper либо
     записи) — проверка голоса и модели без микрофона."""
     from . import feedback
 
     cfg = config.load_config()
-    if args.speaker:
-        cfg.silero_speaker = args.speaker
+    if args.voice:
+        cfg.piper_voice = args.voice
     feedback.configure(cfg, warm_up=False)
     print(f"Движок: {feedback.engine_name()}")
     feedback.speak(args.text, fallback=None)
@@ -85,9 +85,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_settings = subparsers.add_parser("settings", help="открыть GUI-окно настроек")
     p_settings.set_defaults(func=_cmd_settings)
 
-    p_say = subparsers.add_parser("say", help="озвучить текст голосом помощника (проверка синтеза Silero)")
+    p_say = subparsers.add_parser("say", help="озвучить текст голосом помощника (проверка синтеза Piper)")
     p_say.add_argument("text")
-    p_say.add_argument("--speaker", default="", help="голос Silero: xenia, baya, kseniya, aidar, eugene")
+    p_say.add_argument("--voice", default="", help="голос Piper, напр. ru_RU-denis-medium, ru_RU-irina-medium")
     p_say.set_defaults(func=_cmd_say)
 
     p_test = subparsers.add_parser("test-command", help="проверить сопоставление текста команде без аудио")

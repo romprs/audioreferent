@@ -68,20 +68,22 @@ feedback:
   speech: false
 
 # Чем озвучивать ответы при feedback.speech: true.
-#   silero     — синтез Silero TTS (офлайн, один женский голос, любой текст;
-#                нужны torch и модель v4_ru.pt — RPM кладёт её в
-#                /usr/share/audioreferent/silero/). Ударения в проблемных
-#                словах задаются в коде знаком "+" (feedback._STRESSED).
+#   piper      — синтез Piper TTS (офлайн, один голос, любой текст, ~0,1 с
+#                на фразу; нужны программа piper и файлы голоса — RPM кладёт
+#                их в /opt/audioreferent/piper/ и /usr/share/audioreferent/piper/).
 #   recordings — только заранее записанные фразы из voice/*.mp3; для текста
 #                без записи звучит общее «Не удалось выполнить команду».
-# Если Silero выбран, но недоступен (нет torch/модели), помощник сам
+# Если Piper выбран, но недоступен (нет программы/голоса), помощник сам
 # переходит на записи, а причина пишется в журнал.
-tts_engine: silero
-# null = искать модель в /usr/share/audioreferent/silero/v4_ru.pt и
-# ~/.local/share/audioreferent/v4_ru.pt
-silero_model_path: null
-# Голоса v4_ru: xenia, baya, kseniya (женские), aidar, eugene (мужские)
-silero_speaker: xenia
+tts_engine: piper
+# null = искать piper в /opt/audioreferent/piper/piper, ~/.local/share/audioreferent/piper/piper, PATH
+piper_binary_path: null
+# null = искать голоса в /usr/share/audioreferent/piper и ~/.local/share/audioreferent/piper
+piper_voices_dir: null
+# Голоса (файл <имя>.onnx + <имя>.onnx.json): ru_RU-denis-medium и
+# ru_RU-dmitri-medium — мужские, лицензия CC0; ru_RU-irina-medium — женский,
+# голос RHVoice (CC BY-NC-ND — для продукта нужно разрешение RHVoice Lab).
+piper_voice: ru_RU-denis-medium
 
 commands:
   - phrases: ["открой браузер", "запусти браузер"]

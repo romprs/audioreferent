@@ -211,14 +211,22 @@ class SettingsWindow(QMainWindow):
         layout.addSpacing(16)
         layout.addWidget(QLabel("Движок:"))
         self.tts_engine_combo = QComboBox()
-        self.tts_engine_combo.addItem("Silero (синтез, любой текст)", "silero")
+        self.tts_engine_combo.addItem("Piper (синтез, любой текст)", "piper")
         self.tts_engine_combo.addItem("Записанные фразы (voice/*.mp3)", "recordings")
         layout.addWidget(self.tts_engine_combo)
         layout.addWidget(QLabel("Голос:"))
         self.tts_speaker_combo = QComboBox()
-        from .tts import SPEAKERS
+        self.tts_speaker_combo.setEditable(True)
+        from . import tts
 
-        self.tts_speaker_combo.addItems(SPEAKERS)
+        # Установленные голоса первыми, затем известные имена (на случай,
+        # если файлы ещё не положены) — без дублей.
+        voices = tts.available_voices(self.cfg.piper_voices_dir)
+        voices += [v for v in tts.KNOWN_VOICES if v not in voices]
+        self.tts_speaker_combo.addItems(voices)
+        self.tts_speaker_combo.setToolTip(
+            "denis/dmitri — CC0; irina — голос RHVoice (нужно разрешение RHVoice Lab для продукта)"
+        )
         layout.addWidget(self.tts_speaker_combo)
         test_btn = QPushButton("Проверить голос")
         test_btn.setToolTip("Озвучить пробную фразу выбранным движком и голосом (без сохранения)")
@@ -232,8 +240,9 @@ class SettingsWindow(QMainWindow):
 
         cfg = config.Config.from_dict(config._read_default_config())
         cfg.tts_engine = self.tts_engine_combo.currentData()
-        cfg.silero_speaker = self.tts_speaker_combo.currentText()
-        cfg.silero_model_path = self.cfg.silero_model_path
+        cfg.piper_voice = self.tts_speaker_combo.currentText().strip()
+        cfg.piper_binary_path = self.cfg.piper_binary_path
+        cfg.piper_voices_dir = self.cfg.piper_voices_dir
         try:
             feedback.configure(cfg, warm_up=False)
             feedback.speak("Команда не распознана")
@@ -347,8 +356,11 @@ class SettingsWindow(QMainWindow):
         self.speech_check.setChecked(cfg.feedback.speech)
         engine_idx = self.tts_engine_combo.findData(cfg.tts_engine)
         self.tts_engine_combo.setCurrentIndex(engine_idx if engine_idx >= 0 else 0)
-        speaker_idx = self.tts_speaker_combo.findText(cfg.silero_speaker)
-        self.tts_speaker_combo.setCurrentIndex(speaker_idx if speaker_idx >= 0 else 0)
+        speaker_idx = self.tts_speaker_combo.findText(cfg.piper_voice)
+        if speaker_idx >= 0:
+            self.tts_speaker_combo.setCurrentIndex(speaker_idx)
+        else:
+            self.tts_speaker_combo.setCurrentText(cfg.piper_voice)
 
         device_idx = self.device_combo.findData(cfg.input_device)
         self.device_combo.setCurrentIndex(device_idx if device_idx >= 0 else 0)
@@ -590,8 +602,9 @@ class SettingsWindow(QMainWindow):
             form_timeout_seconds=self.cfg.form_timeout_seconds,
             event_form=self._collect_event_form_words(),
             tts_engine=self.tts_engine_combo.currentData(),
-            silero_model_path=self.cfg.silero_model_path,
-            silero_speaker=self.tts_speaker_combo.currentText(),
+            piper_binary_path=self.cfg.piper_binary_path,
+            piper_voices_dir=self.cfg.piper_voices_dir,
+            piper_voice=self.tts_speaker_combo.currentText().strip() or "ru_RU-denis-medium",
         )
         config.save_config(cfg)
         self.cfg = cfg

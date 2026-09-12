@@ -21,10 +21,17 @@ Source0:        %{name}-%{version}.tar.gz
 # (слишком большие для репозитория), см. packaging/README.md.
 Source1:        vosk-model-ru-0.42-noextras.tar.gz
 Source2:        vosk-model-spk-0.4.tar.gz
-# Модель синтеза речи Silero TTS (v4_ru, ~40 МБ, см. src/audioreferent/tts.py)
-# — с зеркала huggingface.co/Derur/silero-models (tts/ru/ru_v4/v4_ru.pt);
-# models.silero.ai из сети РФ открывается не всегда. Тоже в SOURCES/.
-Source3:        v4_ru.pt
+# Синтез речи Piper TTS (см. src/audioreferent/tts.py): бинарная сборка
+# rhasspy/piper 2023.11.14-2 (MIT; onnxruntime и данные espeak-ng внутри,
+# ~20 МБ) и голоса с huggingface.co/rhasspy/piper-voices (<имя>.onnx +
+# <имя>.onnx.json, ~63 МБ каждый). denis/dmitri — CC0; irina — голос RHVoice
+# (CC BY-NC-ND, в пакет класть только с разрешением RHVoice Lab).
+# Всё — в SOURCES/, см. packaging/README.md.
+Source3:        piper_linux_x86_64.tar.gz
+Source4:        ru_RU-denis-medium.onnx
+Source5:        ru_RU-denis-medium.onnx.json
+Source6:        ru_RU-dmitri-medium.onnx
+Source7:        ru_RU-dmitri-medium.onnx.json
 
 BuildRequires:  python3-devel
 BuildRequires:  python3-pip
@@ -44,9 +51,9 @@ Recommends:     espeak-ng
 # внутри него есть свои .so (vosk, cffi), но это не системные библиотеки
 # для остального дистрибутива, и сканирование только зря тянет левые
 # Requires/Provides.
-%global __requires_exclude_from ^(/opt/%{name}/venv/|%{_datadir}/%{name}/vosk-model).*$
-%global __provides_exclude_from ^(/opt/%{name}/venv/|%{_datadir}/%{name}/vosk-model).*$
-%global __brp_mangle_shebangs_exclude_from ^/opt/%{name}/venv/.*$
+%global __requires_exclude_from ^(/opt/%{name}/(venv|piper)/|%{_datadir}/%{name}/(vosk-model|piper)).*$
+%global __provides_exclude_from ^(/opt/%{name}/(venv|piper)/|%{_datadir}/%{name}/(vosk-model|piper)).*$
+%global __brp_mangle_shebangs_exclude_from ^/opt/%{name}/(venv|piper)/.*$
 
 %description
 Голосовой помощник, слушающий настраиваемое активационное слово (по
@@ -85,16 +92,6 @@ mkdir -p %{buildroot}/opt/%{name}
 python3 -m venv --system-site-packages %{buildroot}/opt/%{name}/venv
 %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir --upgrade pip
 %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir %{_builddir}/%{name}-%{version}
-# torch для синтеза речи Silero — CPU-сборка с индекса PyTorch (обычная с
-# PyPI тянет CUDA на гигабайты). ~200 МБ колесо, ~700 МБ в venv. Если на
-# сборочной машине лежат заранее скачанные колёса в ~/rpmbuild/SOURCES/torch-wheels/
-# (см. packaging/README.md) — берём их без сети.
-if [ -d "%{_sourcedir}/torch-wheels" ]; then
-    %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir --no-index --find-links "%{_sourcedir}/torch-wheels" torch
-else
-    %{buildroot}/opt/%{name}/venv/bin/pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-fi
-
 # pip/venv записали в pyvenv.cfg и в шебанги venv/bin/* абсолютный путь
 # СБОРОЧНОГО буллрута — check-buildroot иначе ругается на утечку этого
 # пути в установленный пакет.
@@ -122,9 +119,14 @@ mv %{buildroot}%{_datadir}/%{name}/vosk-model-ru-0.42 %{buildroot}%{_datadir}/%{
 tar xzf %{SOURCE2} -C %{buildroot}%{_datadir}/%{name}
 mv %{buildroot}%{_datadir}/%{name}/vosk-model-spk-0.4 %{buildroot}%{_datadir}/%{name}/vosk-model-spk
 
-# Модель синтеза речи Silero — по пути, который tts.py проверяет первым.
-mkdir -p %{buildroot}%{_datadir}/%{name}/silero
-install -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/%{name}/silero/v4_ru.pt
+# Piper: программа в /opt/audioreferent/piper/ (архив содержит каталог
+# piper/ с бинарником, libonnxruntime и espeak-ng-data — распаковываем как
+# есть), голоса — в /usr/share/audioreferent/piper/ (пути, которые tts.py
+# проверяет первыми).
+tar xzf %{SOURCE3} -C %{buildroot}/opt/%{name}
+chmod 0755 %{buildroot}/opt/%{name}/piper/piper
+mkdir -p %{buildroot}%{_datadir}/%{name}/piper
+install -m 0644 %{SOURCE4} %{SOURCE5} %{SOURCE6} %{SOURCE7} %{buildroot}%{_datadir}/%{name}/piper/
 
 mkdir -p %{buildroot}%{_userunitdir}
 install -m 0644 systemd/audioreferent.service %{buildroot}%{_userunitdir}/audioreferent.service
@@ -139,7 +141,7 @@ install -m 0644 packaging/audioreferent-settings.desktop %{buildroot}%{_datadir}
 %{_datadir}/applications/audioreferent-settings.desktop
 %{_datadir}/%{name}/vosk-model
 %{_datadir}/%{name}/vosk-model-spk
-%{_datadir}/%{name}/silero
+%{_datadir}/%{name}/piper
 %doc README.md
 
 %post
@@ -149,7 +151,7 @@ echo "Включить автозапуск: systemctl --user enable --now audio
 
 %changelog
 * Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-4
-- Голосовой ответ синтезом Silero TTS (голос xenia, модель v4_ru в пакете, torch в venv); записи — резерв
+- Голосовой ответ синтезом Piper TTS (программа piper и голоса denis/dmitri в пакете, MIT/CC0); записи — резерв
 - Слова формы встречи в конфиге и GUI; пользовательские команды сливаются с умолчаниями пакета; инфинитивы фраз
 
 * Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-3
