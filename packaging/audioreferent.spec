@@ -24,14 +24,17 @@ Source2:        vosk-model-spk-0.4.tar.gz
 # Синтез речи Piper TTS (см. src/audioreferent/tts.py): бинарная сборка
 # rhasspy/piper 2023.11.14-2 (MIT; onnxruntime и данные espeak-ng внутри,
 # ~20 МБ) и голоса с huggingface.co/rhasspy/piper-voices (<имя>.onnx +
-# <имя>.onnx.json, ~63 МБ каждый). denis/dmitri — CC0; irina — голос RHVoice
-# (CC BY-NC-ND, в пакет класть только с разрешением RHVoice Lab).
+# <имя>.onnx.json, ~63 МБ каждый). irina — женский голос RHVoice (лаборатория
+# Tiflo RHVoice письмом от 12.09.2026 подтвердила, что дополнительного
+# разрешения не требуется), denis/dmitri — мужские, CC0.
 # Всё — в SOURCES/, см. packaging/README.md.
 Source3:        piper_linux_x86_64.tar.gz
-Source4:        ru_RU-denis-medium.onnx
-Source5:        ru_RU-denis-medium.onnx.json
-Source6:        ru_RU-dmitri-medium.onnx
-Source7:        ru_RU-dmitri-medium.onnx.json
+Source4:        ru_RU-irina-medium.onnx
+Source5:        ru_RU-irina-medium.onnx.json
+Source6:        ru_RU-denis-medium.onnx
+Source7:        ru_RU-denis-medium.onnx.json
+Source8:        ru_RU-dmitri-medium.onnx
+Source9:        ru_RU-dmitri-medium.onnx.json
 
 BuildRequires:  python3-devel
 BuildRequires:  python3-pip
@@ -126,7 +129,7 @@ mv %{buildroot}%{_datadir}/%{name}/vosk-model-spk-0.4 %{buildroot}%{_datadir}/%{
 tar xzf %{SOURCE3} -C %{buildroot}/opt/%{name}
 chmod 0755 %{buildroot}/opt/%{name}/piper/piper
 mkdir -p %{buildroot}%{_datadir}/%{name}/piper
-install -m 0644 %{SOURCE4} %{SOURCE5} %{SOURCE6} %{SOURCE7} %{buildroot}%{_datadir}/%{name}/piper/
+install -m 0644 %{SOURCE4} %{SOURCE5} %{SOURCE6} %{SOURCE7} %{SOURCE8} %{SOURCE9} %{buildroot}%{_datadir}/%{name}/piper/
 
 mkdir -p %{buildroot}%{_userunitdir}
 install -m 0644 systemd/audioreferent.service %{buildroot}%{_userunitdir}/audioreferent.service
@@ -151,7 +154,7 @@ echo "Включить автозапуск: systemctl --user enable --now audio
 
 %changelog
 * Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-4
-- Голосовой ответ синтезом Piper TTS (программа piper и голоса denis/dmitri в пакете, MIT/CC0); записи — резерв
+- Голосовой ответ синтезом Piper TTS (программа piper, голоса irina/denis/dmitri в пакете); записи — резерв
 - Слова формы встречи в конфиге и GUI; пользовательские команды сливаются с умолчаниями пакета; инфинитивы фраз
 
 * Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-3

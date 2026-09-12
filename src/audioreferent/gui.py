@@ -225,7 +225,7 @@ class SettingsWindow(QMainWindow):
         voices += [v for v in tts.KNOWN_VOICES if v not in voices]
         self.tts_speaker_combo.addItems(voices)
         self.tts_speaker_combo.setToolTip(
-            "denis/dmitri — CC0; irina — голос RHVoice (нужно разрешение RHVoice Lab для продукта)"
+            "irina — женский голос RHVoice (разрешение лаборатории получено 12.09.2026); denis/dmitri — мужские, CC0"
         )
         layout.addWidget(self.tts_speaker_combo)
         test_btn = QPushButton("Проверить голос")

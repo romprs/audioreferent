@@ -96,19 +96,20 @@ onnxruntime и данные espeak-ng, ~20 МБ) и файлы голосов (~
 ```bash
 cd ~/rpmbuild/SOURCES
 curl -LO https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz
-for v in denis dmitri; do for ext in onnx onnx.json; do
+for v in irina denis dmitri; do for ext in onnx onnx.json; do
   curl -LO "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/$v/medium/ru_RU-$v-medium.$ext"
 done; done
 ```
 
 Лицензии: программа Piper — MIT (именно сборка 2023.11.14; Python-пакет
-`piper-tts` новее 1.2 — GPL, поэтому он не используется); голоса
-`ru_RU-denis-medium` и `ru_RU-dmitri-medium` — CC0. Женский голос
-`ru_RU-irina-medium` обучен на данных RHVoice, а голоса RHVoice — CC BY-NC-ND
-4.0: в продукт его можно включать только с письменного разрешения RHVoice
-Lab (rhvoice@rhvoice.org / rhvoice@tiflo.org). Пока разрешения нет, irina в
-пакет не кладётся; положенный вручную в `/usr/share/audioreferent/piper/`
-файл подхватится настройкой `piper_voice`.
+`piper-tts` новее 1.2 — GPL, поэтому он не используется). Голос по
+умолчанию `ru_RU-irina-medium` (женский) обучен на данных RHVoice; голоса
+RHVoice распространяются под CC BY-NC-ND 4.0 с оговоркой «для включения в
+продукт — по разрешению лаборатории», и такое подтверждение получено:
+письмо руководителя лаборатории Tiflo RHVoice А. Плаксина от 12.09.2026
+(«Для Ирины не требуется дополнительное разрешение») — храните его вместе с
+документами продукта. `ru_RU-denis-medium` и `ru_RU-dmitri-medium` (мужские)
+— CC0.
 
 Без программы/голоса помощник не ломается: `feedback.py` переходит на
 записанные фразы `voice/*.mp3`.

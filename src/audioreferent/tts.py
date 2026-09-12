@@ -6,10 +6,11 @@
 записанные фразы — только для фиксированного набора.
 
 Почему Piper, а не Silero: движок Piper под MIT и весит ~30 МБ (ONNX
-Runtime, без torch на 700 МБ), а у голосов есть свободные варианты (denis,
-dmitri — CC0). Женский голос irina обучен на данных RHVoice (CC BY-NC-ND) —
-для продукта нужно разрешение RHVoice Lab, см. packaging/README.md.
-Ударения Piper ставит сам (через словарь espeak-ng), спецразметки нет.
+Runtime, без torch на 700 МБ), а голоса свободны: irina (женский) обучен
+на данных RHVoice — лаборатория Tiflo RHVoice письмом от 12.09.2026
+подтвердила, что дополнительного разрешения на него не требуется; denis и
+dmitri (мужские) — CC0. Ударения Piper ставит сам (через словарь
+espeak-ng), спецразметки нет.
 
 Движок вызывается как внешняя программа (piper --output-raw): у Python-
 пакета piper-tts версии новее 1.2 лицензия GPL, а бинарная сборка
@@ -40,9 +41,11 @@ DEFAULT_VOICE_DIRS = [
     str(Path.home() / ".local" / "share" / "audioreferent" / "piper"),
 ]
 
-#: Голос по умолчанию — CC0, без лицензионных вопросов. irina (женский)
-#: доступен переключателем, когда есть разрешение RHVoice Lab.
-DEFAULT_VOICE = "ru_RU-denis-medium"
+#: Голос по умолчанию — женский irina (обучен на данных RHVoice; по ответу
+#: руководителя лаборатории Tiflo RHVoice от 12.09.2026 дополнительного
+#: разрешения на его использование в продукте не требуется). denis/dmitri —
+#: мужские, CC0.
+DEFAULT_VOICE = "ru_RU-irina-medium"
 KNOWN_VOICES = ["ru_RU-denis-medium", "ru_RU-dmitri-medium", "ru_RU-irina-medium", "ru_RU-ruslan-medium"]
 
 

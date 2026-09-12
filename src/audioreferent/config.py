@@ -99,7 +99,7 @@ class Config:
     tts_engine: str = "piper"
     piper_binary_path: str | None = None
     piper_voices_dir: str | None = None
-    piper_voice: str = "ru_RU-denis-medium"
+    piper_voice: str = "ru_RU-irina-medium"
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -122,7 +122,7 @@ class Config:
             tts_engine=data.get("tts_engine", "piper"),
             piper_binary_path=data.get("piper_binary_path"),
             piper_voices_dir=data.get("piper_voices_dir"),
-            piper_voice=data.get("piper_voice", "ru_RU-denis-medium"),
+            piper_voice=data.get("piper_voice", "ru_RU-irina-medium"),
         )
 
 

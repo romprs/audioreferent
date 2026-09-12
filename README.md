@@ -203,9 +203,10 @@ audioreferent test-command "открой браузер" --dry-run
 MIT) и голоса лежат в `/opt/audioreferent/piper/` и
 `/usr/share/audioreferent/piper/` (ставятся RPM) либо в
 `~/.local/share/audioreferent/piper/`. Голос выбирается в настройках
-(`piper_voice`): `ru_RU-denis-medium`, `ru_RU-dmitri-medium` — мужские, CC0;
-`ru_RU-irina-medium` — женский, голос RHVoice (CC BY-NC-ND — для продукта
-нужно разрешение RHVoice Lab). Проверить из терминала:
+(`piper_voice`): по умолчанию `ru_RU-irina-medium` — женский, голос RHVoice
+(лаборатория Tiflo RHVoice подтвердила 12.09.2026, что дополнительного
+разрешения не требуется, см. `docs/licenses/`); `ru_RU-denis-medium`,
+`ru_RU-dmitri-medium` — мужские, CC0. Проверить из терминала:
 
 ```bash
 audioreferent say "Встреча сохранена" --voice ru_RU-irina-medium

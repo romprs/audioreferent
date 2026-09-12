@@ -80,10 +80,11 @@ tts_engine: piper
 piper_binary_path: null
 # null = искать голоса в /usr/share/audioreferent/piper и ~/.local/share/audioreferent/piper
 piper_voices_dir: null
-# Голоса (файл <имя>.onnx + <имя>.onnx.json): ru_RU-denis-medium и
-# ru_RU-dmitri-medium — мужские, лицензия CC0; ru_RU-irina-medium — женский,
-# голос RHVoice (CC BY-NC-ND — для продукта нужно разрешение RHVoice Lab).
-piper_voice: ru_RU-denis-medium
+# Голоса (файл <имя>.onnx + <имя>.onnx.json): ru_RU-irina-medium — женский,
+# голос RHVoice (лаборатория Tiflo RHVoice подтвердила 12.09.2026, что
+# дополнительного разрешения не требуется); ru_RU-denis-medium и
+# ru_RU-dmitri-medium — мужские, CC0.
+piper_voice: ru_RU-irina-medium
 
 commands:
   - phrases: ["открой браузер", "запусти браузер"]
