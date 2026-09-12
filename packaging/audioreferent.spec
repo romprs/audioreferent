@@ -1,6 +1,6 @@
 Name:           audioreferent
 Version:        0.1.0
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        Голосовой помощник с командами на русском языке для РЭД ОС
 
 # Стандартное для РЭД ОС payload-сжатие (zstd) дало битый архив на одном
@@ -153,6 +153,9 @@ echo "Изменить: audioreferent set-wakeword \"<слово>\""
 echo "Включить автозапуск: systemctl --user enable --now audioreferent.service"
 
 %changelog
+* Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-5
+- Голос irina (RHVoice, с разрешения RHVoice Lab) в пакете и по умолчанию; перечень сторонних лицензий
+
 * Sat Sep 12 2026 romprs <romprs@gmail.com> - 0.1.0-4
 - Голосовой ответ синтезом Piper TTS (программа piper, голоса irina/denis/dmitri в пакете); записи — резерв
 - Слова формы встречи в конфиге и GUI; пользовательские команды сливаются с умолчаниями пакета; инфинитивы фраз
