@@ -450,6 +450,25 @@ def test_open_address_book_command_and_cancel():
     assert reply.spoken == "Книга закрыта" and not redmail_actions.picker_is_open()
 
 
+def test_dobav_keyword_and_list_participants():
+    redmail_actions._picker_open = False
+    redmail_actions._known_names.clear()
+    # «добавь будько» — то же, что «участники будько»
+    reply, mock_set = _participants("добавь будько")
+    mock_set.assert_called_once_with(add_participants=["budko@example.com"])
+    assert reply.spoken == "Добавлен Будько Евгений"
+    # имена запомнены -> «назови участников» читает их по адресам из формы
+    with patch(FORM + "_redmail_event_form_state", return_value={"participants": ["budko@example.com", "ponomarev@example.com"]}), patch(
+        FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts
+    ):
+        listed = _form_phrase("назови участников")
+    assert listed.spoken == "Участники — двое: Будько Евгений, Пономарев Роман"  # второй — по локальной части адреса
+    with patch(FORM + "_redmail_event_form_state", return_value={"participants": []}):
+        assert _form_phrase("кто участники").spoken == "Участников пока нет"
+    assert redmail_actions.looks_like_form_phrase("назови участников", wake_word="вика", fuzzy_threshold=1)
+    assert redmail_actions.looks_like_form_phrase("открой адресную книгу", wake_word="вика", fuzzy_threshold=1)
+
+
 def test_participants_not_found_names_who():
     reply, mock_set = _participants("пригласить жилкин")
     mock_set.assert_not_called()

@@ -294,6 +294,9 @@ def handle_form_phrase(
         reply = handle_picker_phrase(tokens)
         if reply is not None:
             return reply
+    listed = _list_participants_command(tokens)
+    if listed is not None:
+        return listed
     opened = _open_picker_command(tokens)
     if opened is not None:
         return opened
@@ -459,6 +462,7 @@ def _set_participants(name_words: list[str]) -> FormReply:
         else:
             ambiguous.append((window, contacts))
 
+    _remember_names(added + [c for _window, cs in ambiguous for c in cs])
     if added:
         _redmail_event_form_set(add_participants=[c["email"] for c in added])
     # Кандидатов запоминаем только когда их обозримо мало: одиночное имя
@@ -654,6 +658,7 @@ def handle_picker_phrase(tokens: list[str]) -> FormReply | None:
         if not accept:
             return FormReply(handled=True)
         selected = _redmail_picker_accept()
+        _remember_names(selected)
         names = ", ".join(str(c.get("name") or c.get("email", "")) for c in selected)
         return _picker_finish(f"Участники: {names}" if names else "Никто не выбран")
     except RedmailError as exc:
@@ -665,6 +670,58 @@ def handle_picker_phrase(tokens: list[str]) -> FormReply | None:
             _picker_queue.clear()
             return None  # книгу закрыли мышью — фраза относится к форме
         return FormReply(handled=True, spoken="Не удалось выполнить команду")
+
+
+#: Имена по адресам — всё, что помощник узнал из адресной книги за сеанс
+#: (найденные, выбранные в книге). Нужно для «назови участников»: форма
+#: отдаёт только адреса.
+_known_names: dict[str, str] = {}
+
+_LIST_PHRASES = ("назови участников", "перечисли участников", "кто участники", "какие участники", "список участников", "кто приглашён", "кого пригласили")
+
+
+def _remember_names(contacts: list[dict]) -> None:
+    for contact in contacts:
+        email = str(contact.get("email", "")).casefold()
+        name = str(contact.get("name", "")).strip()
+        if email and name:
+            _known_names[email] = name
+
+
+def _name_for(email: str) -> str:
+    """Имя по адресу: из запомненных, иначе — спросить книгу по локальной
+    части адреса (redmail сравнивает и её), иначе — сам адрес."""
+    key = email.casefold()
+    if key in _known_names:
+        return _known_names[key]
+    local = email.split("@", 1)[0]
+    try:
+        found = [c for c in _redmail_find_contacts(local) if str(c.get("email", "")).casefold() == key]
+    except RedmailError:
+        found = []
+    if found:
+        _remember_names(found)
+        return _known_names[key]
+    return email
+
+
+def _list_participants_command(tokens: list[str]) -> FormReply | None:
+    """«назови участников» — перечислить, кто сейчас в форме."""
+    text = " ".join(tokens)
+    if not any(text.startswith(phrase) for phrase in _LIST_PHRASES):
+        return None
+    try:
+        state = _redmail_event_form_state()
+    except RedmailError as exc:
+        if _form_closed(exc):
+            return FormReply(handled=True, finished=True)
+        return FormReply(handled=True, spoken="Не удалось выполнить команду")
+    emails = [e for e in state.get("participants", []) if isinstance(e, str)]
+    if not emails:
+        return FormReply(handled=True, spoken="Участников пока нет")
+    names = ", ".join(_name_for(e) for e in emails)
+    count = _COUNT_WORDS.get(len(emails), str(len(emails)))
+    return FormReply(handled=True, spoken=f"Участники — {count}: {names}" if len(emails) > 1 else f"Участник: {names}")
 
 
 def _open_picker_command(tokens: list[str]) -> FormReply | None:
@@ -696,6 +753,9 @@ def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, w
         return False
     if _picker_open:
         return True  # книга на экране — любая фраза адресована ей
+    joined = " ".join(tokens)
+    if any(joined.startswith(p) for p in _LIST_PHRASES + _PICKER_OPEN_PHRASES):
+        return True
     if tokens[0] in _keyword_map(form_words) or tokens[0] in form_words.save or tokens[0] in form_words.cancel:
         return True
     # ответ на «уточните имя» — голое имя из запомненных кандидатов
