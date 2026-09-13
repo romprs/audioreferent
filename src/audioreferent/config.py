@@ -105,7 +105,7 @@ class Config:
     # речи в секундах (null — по режиму) и размер аудиоблока в сэмплах
     # (меньше — меньше задержка, чуть больше нагрузка; 4000 = 0,25 с).
     recognition_endpointing: str = "short"
-    recognition_end_silence_seconds: float | None = 0.6
+    recognition_end_silence_seconds: float | None = 0.4
     audio_block_samples: int = 4000
 
     @classmethod
@@ -131,7 +131,7 @@ class Config:
             piper_voices_dir=data.get("piper_voices_dir"),
             piper_voice=data.get("piper_voice", "ru_RU-irina-medium"),
             recognition_endpointing=data.get("recognition_endpointing", "short"),
-            recognition_end_silence_seconds=data.get("recognition_end_silence_seconds", 0.6),
+            recognition_end_silence_seconds=data.get("recognition_end_silence_seconds", 0.4),
             audio_block_samples=int(data.get("audio_block_samples", 4000)),
         )
 

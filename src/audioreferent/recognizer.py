@@ -9,6 +9,8 @@ from pathlib import Path
 
 import vosk
 
+from .model_overlay import prepare_model_with_endpointing
+
 vosk.SetLogLevel(-1)  # не засорять stdout служебными логами Kaldi
 
 log = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ def resolve_spk_model_path(configured_path: str | None) -> str | None:
 ENDPOINTING_MODES = ("short", "default", "long")
 
 
+
 class SpeechRecognizer:
     def __init__(
         self,
@@ -72,7 +75,10 @@ class SpeechRecognizer:
         endpointing: str = "short",
         end_silence_seconds: float | None = None,
     ):
-        self._model = vosk.Model(model_path)
+        # Паузы конца фразы задаются в conf/model.conf самой модели — грузим
+        # её через оверлей с укороченными паузами (см.
+        # prepare_model_with_endpointing), т.к. API для этого в vosk 0.3.45 нет.
+        self._model = vosk.Model(prepare_model_with_endpointing(model_path, end_silence_seconds))
         self._sample_rate = sample_rate
         self._recognizer = vosk.KaldiRecognizer(self._model, sample_rate)
         self._last_speaker_vector: list[float] | None = None

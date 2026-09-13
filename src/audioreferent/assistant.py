@@ -106,7 +106,9 @@ class Assistant:
         if self._partial_since is None or self._partial_since[0] != partial:
             self._partial_since = (partial, now)
             return None
-        if now - self._partial_since[1] >= silence:
+        # Страховка на случай, если детектор Vosk (правила из model.conf,
+        # см. model_overlay) не сработал: ждём в полтора раза дольше него.
+        if now - self._partial_since[1] >= silence * 1.5:
             self._partial_since = None
             return self.recognizer.finalize()
         return None
