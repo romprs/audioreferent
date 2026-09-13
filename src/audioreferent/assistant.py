@@ -126,7 +126,7 @@ class Assistant:
             return True
         log.info("Поле формы: %r%s", text, f" -> {reply.spoken}" if reply.spoken else "")
         if reply.spoken:
-            self._speak(reply.spoken)
+            self._speak(reply.spoken, fallback=reply.spoken_fallback or "Не удалось выполнить команду")
         else:
             self._beep(drop_echo=True)
         if reply.finished:
@@ -167,6 +167,22 @@ class Assistant:
                         continue
                     wake_alerted = False
                     if not heard_wake:
+                        # Режим заполнения мог погаснуть по таймауту, пока
+                        # человек переключался между окнами, а окно встречи
+                        # в redmail всё ещё открыто — тогда фраза-поле
+                        # («участники шапошников») возвращает режим сама,
+                        # без активационного слова и без «продолжи…».
+                        if final.strip() and redmail_actions.looks_like_form_phrase(
+                            final,
+                            wake_word=self.config.wake_word,
+                            fuzzy_threshold=self.config.wake_word_fuzzy_threshold,
+                            words=self.config.event_form,
+                        ) and redmail_actions.form_is_open():
+                            log.info("Окно встречи открыто — возвращаюсь в режим заполнения по фразе %r", final)
+                            self.recognizer.reset()
+                            if self._on_form_phrase(final):
+                                state = "form"
+                                deadline = time.monotonic() + self.config.form_timeout_seconds
                         continue
                     if self.speaker_verifier is not None:
                         vector = self.recognizer.last_speaker_vector

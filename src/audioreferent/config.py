@@ -90,7 +90,7 @@ class Config:
     # Режим заполнения формы встречи (см. assistant.py): сколько секунд без
     # фраз-полей держать режим, прежде чем выйти из него (окно при этом
     # остаётся открытым — дозаполнить можно мышью).
-    form_timeout_seconds: float = 60
+    form_timeout_seconds: float = 120
     event_form: EventFormWords = field(default_factory=EventFormWords)
     # Голосовой ответ: "piper" — синтез Piper TTS (см. tts.py; любой текст
     # одним голосом, нужны программа piper и файлы голоса), "recordings" —
@@ -117,7 +117,7 @@ class Config:
             spk_model_path=data.get("spk_model_path"),
             voice_lock_enabled=data.get("voice_lock_enabled", False),
             voice_lock_threshold=data.get("voice_lock_threshold", 0.5),
-            form_timeout_seconds=data.get("form_timeout_seconds", 60),
+            form_timeout_seconds=data.get("form_timeout_seconds", 120),
             event_form=EventFormWords.from_dict(data.get("event_form")),
             tts_engine=data.get("tts_engine", "piper"),
             piper_binary_path=data.get("piper_binary_path"),

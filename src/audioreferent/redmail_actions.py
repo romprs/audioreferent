@@ -23,6 +23,7 @@ from .redmail_client import event_form_cancel as _redmail_event_form_cancel
 from .redmail_client import event_form_open as _redmail_event_form_open
 from .redmail_client import event_form_save as _redmail_event_form_save
 from .redmail_client import event_form_set as _redmail_event_form_set
+from .redmail_client import event_form_state as _redmail_event_form_state
 from .redmail_client import find_contacts as _redmail_find_contacts
 from .redmail_client import find_events as _redmail_find_events
 from .redmail_client import focus as _redmail_focus
@@ -206,8 +207,11 @@ class FormSession:
 @dataclass
 class FormReply:
     handled: bool  # фраза была про форму (поле / сохранить / отменить)
-    spoken: str | None = None  # что озвучить (фиксированная фраза с записью) либо ничего
+    spoken: str | None = None  # что озвучить: синтезом — любой текст, записью — фиксированная фраза
     finished: bool = False  # режим заполнения окончен (сохранено/отменено/окно закрыто)
+    # Чем озвучить, если движка синтеза нет и для spoken нет записи
+    # (например, «Участник Жилкин не найден» -> запись «Участник не найден»).
+    spoken_fallback: str | None = None
 
 
 _PARTICIPANT_FILLERS = ("и", "а", "также", "ещё", "еще")
@@ -294,10 +298,17 @@ def handle_form_phrase(
         if field == "subject":
             _redmail_event_form_set(subject=rest)
         elif field == "date":
-            value = ru_datetime.parse_date(rest)
+            # «дата пятнадцатое сентября четырнадцать ноль ноль» — дату и,
+            # если названо, время (с предлогом «в» или без него).
+            leftover, value, at = ru_datetime.extract(rest)
             if value is None:
                 return FormReply(handled=True, spoken="Не поняла дату")
-            _redmail_event_form_set(date=value.isoformat())
+            if at is None and leftover:
+                at = ru_datetime.parse_time("в " + leftover)
+            changes: dict[str, Any] = {"date": value.isoformat()}
+            if at is not None:
+                changes["time"] = f"{at[0]:02d}:{at[1]:02d}"
+            _redmail_event_form_set(**changes)
         elif field == "time":
             # поле называют без предлога ("время восемь тридцать") — разбор
             # ждёт "в/на", подставляем
@@ -333,30 +344,151 @@ def handle_form_phrase(
         return FormReply(handled=True, spoken="Не удалось выполнить команду")
 
 
+# --- участники: поиск по адресной книге -------------------------------
+#
+# Адресная книга большая (тысячи контактов): одна фамилия почти всегда даёт
+# нескольких («Пономарев» — восемь), поэтому:
+#  * слова фразы группируются в одного человека — для каждой позиции
+#    пробуем окно из трёх, двух, одного слова и берём самое длинное, по
+#    которому что-то нашлось («шилкин евгений александрович» — один
+#    запрос, а не три);
+#  * ровно один контакт — добавляем и называем его; несколько — называем
+#    кандидатов и просим уточнить, а их список запоминаем: следующее
+#    «участники евгений» выбирает уже среди них; ноль — говорим, кого
+#    именно не нашли.
+# Сравнение слов — та же основа, что в redmail (ipc_server.match_contacts):
+# без ё/е-различия и без падежного хвоста; здесь копия для локального
+# отбора среди запомненных кандидатов.
+
+_STEM_TAIL = set("аеёийоуыьюя")
+_COUNT_WORDS = {2: "двое", 3: "трое", 4: "четверо", 5: "пятеро", 6: "шестеро", 7: "семеро", 8: "восемь", 9: "девять"}
+_MAX_LISTED_CANDIDATES = 4
+
+#: Кандидаты последней неоднозначности (dict name/email), см. выше.
+_pending_candidates: list[dict] = []
+
+
+def _stem(word: str) -> str:
+    stem = word.lower().replace("ё", "е")
+    stripped = 0
+    while len(stem) > 3 and stripped < 3 and stem[-1] in _STEM_TAIL:
+        stem = stem[:-1]
+        stripped += 1
+    return stem
+
+
+def _word_matches(query_word: str, name_word: str) -> bool:
+    q, w = _stem(query_word), _stem(name_word)
+    if not q or not w:
+        return False
+    if q == w:
+        return True
+    return min(len(q), len(w)) >= 4 and (q.startswith(w) or w.startswith(q))
+
+
+def _name_words(contact: dict) -> list[str]:
+    words = str(contact.get("name", "")).replace(",", " ").split()
+    local = str(contact.get("email", "")).split("@", 1)[0]
+    words += [w for w in local.replace(".", " ").replace("_", " ").replace("-", " ").split() if w]
+    return words
+
+
+def _local_matches(query_words: list[str], contacts: list[dict]) -> list[dict]:
+    return [c for c in contacts if all(any(_word_matches(q, w) for w in _name_words(c)) for q in query_words)]
+
+
+def _given_names(contact: dict, query_words: list[str]) -> str:
+    """Имя и отчество без той части, что человек уже назвал («Шилкин
+    Евгений Александрович» по запросу «шилкин» -> «Евгений Александрович»)."""
+    rest = [w for w in str(contact.get("name", "")).split() if not any(_word_matches(q, w) for q in query_words)]
+    return " ".join(rest) or str(contact.get("name") or contact.get("email", ""))
+
+
 def _set_participants(name_words: list[str]) -> FormReply:
-    """"участники шилкин пономарёв будько": каждое слово — фамилия (или имя),
-    ищется в адресной книге redmail по основе слова. Ровно один контакт —
-    добавляем; ноль или несколько — «Участник не найден» (кто именно — в
-    журнале), остальных всё равно добавляем."""
     names = [w for w in name_words if w not in _PARTICIPANT_FILLERS]
     if not names:
         return FormReply(handled=True)
-    emails: list[str] = []
+
+    added: list[dict] = []
+    ambiguous: list[tuple[list[str], list[dict]]] = []
     missing: list[str] = []
-    for name in names:
-        contacts = _redmail_find_contacts(name)
+    i = 0
+    while i < len(names):
+        chosen: tuple[list[str], list[dict]] | None = None
+        for length in (3, 2, 1):
+            window = names[i : i + length]
+            if len(window) < length:
+                continue
+            contacts = _local_matches(window, _pending_candidates) or _redmail_find_contacts(" ".join(window))
+            log.info("Участник %r: найдено контактов %d — %s", " ".join(window), len(contacts), [c.get("name") for c in contacts][:8])
+            if contacts:
+                chosen = (window, contacts)
+                break
+        if chosen is None:
+            missing.append(names[i])
+            i += 1
+            continue
+        window, contacts = chosen
+        i += len(window)
         if len(contacts) == 1:
-            emails.append(contacts[0]["email"])
+            added.append(contacts[0])
         else:
-            missing.append(name)
-            log.info("Участник %r: найдено контактов %d — %s", name, len(contacts), [c.get("name") for c in contacts])
-    if emails:
-        _redmail_event_form_set(add_participants=emails)
-    return FormReply(handled=True, spoken="Участник не найден" if missing else None)
+            ambiguous.append((window, contacts))
+
+    if added:
+        _redmail_event_form_set(add_participants=[c["email"] for c in added])
+    _pending_candidates[:] = [c for _window, cs in ambiguous for c in cs]
+
+    parts: list[str] = []
+    if added:
+        parts.append(("Добавлены: " if len(added) > 1 else "Добавлен ") + ", ".join(str(c.get("name") or c["email"]) for c in added))
+    for window, contacts in ambiguous:
+        who = " ".join(window).capitalize()
+        count = _COUNT_WORDS.get(len(contacts), str(len(contacts)))
+        if len(contacts) <= _MAX_LISTED_CANDIDATES:
+            parts.append(f"{who}: найдено {count} — {', '.join(_given_names(c, window) for c in contacts)}. Уточните имя")
+        else:
+            parts.append(f"{who}: найдено {count}, уточните имя")
+    for name in missing:
+        parts.append(f"Участник {name.capitalize()} не найден")
+    if not parts:
+        return FormReply(handled=True)
+    fallback = "Участник не найден" if (ambiguous or missing) else None
+    return FormReply(handled=True, spoken=". ".join(parts), spoken_fallback=fallback)
+
+
+def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, words: EventFormWords | None = None) -> bool:
+    """Начинается ли фраза со слова-поля или «сохранить»/«отменить» — чтобы в
+    режиме ожидания понять, что человек продолжает заполнять открытую форму."""
+    form_words = words if words is not None and words.fields else _default_form_words()
+    stripped = strip_wake_word(text, wake_word, fuzzy_threshold)
+    tokens = (stripped if stripped is not None else text).split()
+    if not tokens:
+        return False
+    return tokens[0] in _keyword_map(form_words) or tokens[0] in form_words.save or tokens[0] in form_words.cancel
+
+
+def form_is_open() -> bool:
+    """Открыта ли сейчас форма встречи в redmail."""
+    try:
+        _redmail_event_form_state()
+    except RedmailError:
+        return False
+    return True
+
+
+def redmail_event_form_resume(args: dict[str, Any]) -> FormSession:  # noqa: ARG001
+    """"продолжи настраивать встречу": вернуться в режим заполнения, если окно
+    встречи в redmail ещё открыто (режим мог погаснуть по таймауту, пока
+    человек переключался между окнами)."""
+    if not form_is_open():
+        raise ActionError("Окно встречи не открыто")
+    return FormSession()
 
 
 ACTIONS = {
     "redmail_focus": redmail_focus,
+    "redmail_event_form_resume": redmail_event_form_resume,
     # Старое имя действия "создай встречу" — теперь это та же пошаговая
     # форма: конфиги, сохранённые из GUI до появления формы, продолжают
     # работать (и получают режим заполнения), а не просят назвать тему.
