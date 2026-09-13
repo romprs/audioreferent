@@ -68,6 +68,28 @@ def test_configure_disables_engine_without_binary_or_voice(monkeypatch, tmp_path
     feedback._engine = None
 
 
+def test_configure_substitutes_missing_voice_instead_of_disabling(monkeypatch, tmp_path):
+    binary = tmp_path / "piper"
+    binary.write_bytes(b"#!/bin/sh\n")
+    _voice(tmp_path, "ru_RU-irina-medium")
+    cfg = SimpleNamespace(
+        tts_engine="piper", piper_binary_path=str(binary), piper_voices_dir=str(tmp_path), piper_voice="ru_RU-ruslan-medium"
+    )
+    feedback.configure(cfg, warm_up=False)
+    assert feedback.engine_name() == "piper"
+    assert feedback.voice_name() == "ru_RU-irina-medium"  # запрошенный не установлен -> умолчание
+    feedback._engine = None
+
+
+def test_no_espeak_when_recordings_exist(monkeypatch):
+    monkeypatch.setattr(feedback, "_engine", None)
+    with patch("audioreferent.feedback._play_recorded", return_value=False), patch(
+        "audioreferent.feedback._recordings_available", return_value=True
+    ), patch("audioreferent.feedback.subprocess.run") as run:
+        feedback.speak("Слушаю", fallback=None)
+    run.assert_not_called()  # ни espeak-ng, ни espeak
+
+
 def test_configure_respects_recordings_engine():
     feedback.configure(SimpleNamespace(tts_engine="recordings", piper_binary_path=None, piper_voices_dir=None, piper_voice="x"))
     assert feedback.engine_name() == "recordings"

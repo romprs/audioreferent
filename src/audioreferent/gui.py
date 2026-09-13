@@ -219,13 +219,16 @@ class SettingsWindow(QMainWindow):
         self.tts_speaker_combo.setEditable(True)
         from . import tts
 
-        # Установленные голоса первыми, затем известные имена (на случай,
-        # если файлы ещё не положены) — без дублей.
+        # Только установленные голоса: раньше список включал и известные
+        # имена без файлов — выбор такого голоса тихо выключал синтез, и
+        # человек слышал записи/espeak, думая, что это «кривой голос».
         voices = tts.available_voices(self.cfg.piper_voices_dir)
-        voices += [v for v in tts.KNOWN_VOICES if v not in voices]
         self.tts_speaker_combo.addItems(voices)
+        if not voices:
+            self.tts_speaker_combo.addItem("(голоса не установлены)")
         self.tts_speaker_combo.setToolTip(
-            "irina — женский голос RHVoice (разрешение лаборатории получено 12.09.2026); denis/dmitri — мужские, CC0"
+            "Установленные голоса Piper (/usr/share/audioreferent/piper). irina — женский голос RHVoice "
+            "(разрешение лаборатории получено 12.09.2026); denis/dmitri — мужские, CC0"
         )
         layout.addWidget(self.tts_speaker_combo)
         test_btn = QPushButton("Проверить голос")
@@ -245,8 +248,22 @@ class SettingsWindow(QMainWindow):
         cfg.piper_voices_dir = self.cfg.piper_voices_dir
         try:
             feedback.configure(cfg, warm_up=False)
-            feedback.speak("Команда не распознана")
-            QMessageBox.information(self, "Проверка голоса", f"Озвучено движком: {feedback.engine_name()}")
+            feedback.speak("Команда не распознана", fallback="Не удалось выполнить команду")
+            if feedback.engine_name() != "piper":
+                QMessageBox.warning(
+                    self,
+                    "Проверка голоса",
+                    "Синтез Piper недоступен (нет программы piper или ни одного голоса) — "
+                    "прозвучала заранее записанная фраза, а не выбранный голос.",
+                )
+            elif feedback.voice_name() != cfg.piper_voice:
+                QMessageBox.warning(
+                    self,
+                    "Проверка голоса",
+                    f"Голос «{cfg.piper_voice}» не установлен — прозвучал «{feedback.voice_name()}».",
+                )
+            else:
+                QMessageBox.information(self, "Проверка голоса", f"Озвучено: Piper, голос {feedback.voice_name()}")
         except Exception as exc:  # noqa: BLE001 — показать пользователю, а не уронить окно
             QMessageBox.warning(self, "Проверка голоса", str(exc))
 

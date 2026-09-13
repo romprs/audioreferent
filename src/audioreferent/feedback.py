@@ -118,17 +118,44 @@ def configure(cfg, *, warm_up: bool = True) -> None:
     if not binary:
         log.warning("Синтез Piper включён, но программа piper не найдена — отвечаю записями")
         return
-    voice = tts.resolve_voice(cfg.piper_voice or tts.DEFAULT_VOICE, cfg.piper_voices_dir)
-    if not voice:
-        log.warning("Синтез Piper включён, но голос %r не найден — отвечаю записями", cfg.piper_voice)
+    requested = cfg.piper_voice or tts.DEFAULT_VOICE
+    voice_name, voice_path = tts.pick_voice(requested, cfg.piper_voices_dir)
+    if not voice_path:
+        log.warning("Синтез Piper включён, но ни одного голоса не установлено — отвечаю записями")
         return
-    _engine = tts.PiperEngine(binary, voice)
+    if voice_name != requested:
+        # Голос из конфига не установлен — говорим тем, что есть, а не
+        # выключаем синтез: иначе часть ответов ушла бы в записи, а фразы
+        # без записи — в espeak-ng («робот»), и разобраться, что случилось,
+        # по звуку невозможно.
+        log.warning("Голос %r не установлен — использую %r", requested, voice_name)
+    _engine = tts.PiperEngine(binary, voice_path)
+    _engine.voice_name = voice_name
     if warm_up:
         _engine.warm_up(list(_PRERECORDED_PHRASES))
 
 
 def engine_name() -> str:
     return "piper" if _engine is not None else "recordings"
+
+
+def voice_name() -> str | None:
+    """Имя голоса, которым реально говорит движок (None — движка нет)."""
+    return getattr(_engine, "voice_name", None) if _engine is not None else None
+
+
+def _recordings_available() -> bool:
+    """Есть ли вообще записи (mpg123 и хотя бы общая фраза) — тогда
+    espeak-ng не нужен: лучше сигнал, чем «робот»."""
+    if not shutil.which("mpg123"):
+        return False
+    try:
+        with resources.as_file(
+            resources.files("audioreferent").joinpath(_PRERECORDED_PHRASES["Не удалось выполнить команду"])
+        ) as path:
+            return path.is_file()
+    except OSError:
+        return False
 
 
 def _play_pcm(pcm: bytes, sample_rate: int) -> None:
@@ -163,6 +190,12 @@ def speak(text: str, fallback: str | None = None) -> None:
         return
     if fallback and fallback != text and _play_recorded(fallback):
         log.debug("Для фразы %r нет записи, озвучено как %r", text, fallback)
+        return
+    if _recordings_available():
+        # Записи есть, просто не для этого текста (и fallback не задан) —
+        # молчим: синтез espeak-ng звучит «роботом», человек принимал его за
+        # поломку. Текст остаётся в журнале.
+        log.info("Нет записи для фразы %r — пропускаю голосовой ответ", text)
         return
 
     if shutil.which("espeak-ng"):

@@ -290,6 +290,11 @@ def handle_form_phrase(
 
         field = keyword_map.get(first)
         if field is None:
+            # Помощник только что спросил «уточните имя» — ответом служит
+            # голое имя без слова «участники» («евгений»), если оно
+            # выбирает кого-то из запомненных кандидатов.
+            if _pending_candidates and _local_matches(tokens, _pending_candidates):
+                return _set_participants(tokens)
             return FormReply(handled=False)
         if field == "participants":
             return _set_participants(rest_words)
@@ -465,7 +470,10 @@ def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, w
     tokens = (stripped if stripped is not None else text).split()
     if not tokens:
         return False
-    return tokens[0] in _keyword_map(form_words) or tokens[0] in form_words.save or tokens[0] in form_words.cancel
+    if tokens[0] in _keyword_map(form_words) or tokens[0] in form_words.save or tokens[0] in form_words.cancel:
+        return True
+    # ответ на «уточните имя» — голое имя из запомненных кандидатов
+    return bool(_pending_candidates) and bool(_local_matches(tokens, _pending_candidates))
 
 
 def form_is_open() -> bool:

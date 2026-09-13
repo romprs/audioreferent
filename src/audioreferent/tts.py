@@ -46,7 +46,22 @@ DEFAULT_VOICE_DIRS = [
 #: разрешения на его использование в продукте не требуется). denis/dmitri —
 #: мужские, CC0.
 DEFAULT_VOICE = "ru_RU-irina-medium"
-KNOWN_VOICES = ["ru_RU-denis-medium", "ru_RU-dmitri-medium", "ru_RU-irina-medium", "ru_RU-ruslan-medium"]
+#: Голоса, которые кладёт пакет (ru_RU-ruslan-medium — CC BY-NC-SA, в пакет
+#: не входит и здесь не перечислен).
+KNOWN_VOICES = ["ru_RU-irina-medium", "ru_RU-denis-medium", "ru_RU-dmitri-medium"]
+
+
+def pick_voice(requested: str | None, voices_dir: str | None) -> tuple[str | None, str | None]:
+    """(имя голоса, путь к .onnx) — запрошенный, если установлен; иначе голос
+    по умолчанию; иначе первый установленный. (None, None) — голосов нет.
+    Отдельно от resolve_voice, чтобы вызывающий мог сообщить о подмене."""
+    for candidate in (requested, DEFAULT_VOICE, *available_voices(voices_dir)):
+        if not candidate:
+            continue
+        path = resolve_voice(candidate, voices_dir)
+        if path:
+            return candidate, path
+    return None, None
 
 
 def resolve_binary(configured_path: str | None) -> str | None:

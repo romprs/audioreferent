@@ -296,6 +296,22 @@ def test_participants_ambiguous_surname_lists_candidates_and_asks():
     assert follow_up.spoken == "Добавлен Шилкин Евгений Александрович"
 
 
+def test_bare_name_answers_the_clarification_question():
+    _participants("участник шилкин")  # -> «уточните имя», кандидаты запомнены
+    with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(
+        FORM + "_redmail_event_form_set"
+    ) as mock_set:
+        reply = _form_phrase("евгений")  # без слова «участники»
+    assert reply.handled and reply.spoken == "Добавлен Шилкин Евгений Александрович"
+    mock_set.assert_called_once_with(add_participants=["shilkin.e@example.com"])
+    # в режиме ожидания такое имя тоже считается фразой формы
+    _participants("участник шилкин")
+    assert redmail_actions.looks_like_form_phrase("александр", wake_word="вика", fuzzy_threshold=1)
+    redmail_actions._pending_candidates.clear()
+    assert not redmail_actions.looks_like_form_phrase("александр", wake_word="вика", fuzzy_threshold=1)
+    assert _form_phrase("евгений") == redmail_actions.FormReply(handled=False)
+
+
 def test_participants_not_found_names_who():
     reply, mock_set = _participants("пригласить жилкин")
     mock_set.assert_not_called()
