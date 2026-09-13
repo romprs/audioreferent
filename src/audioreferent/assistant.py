@@ -12,6 +12,7 @@ import time
 
 from . import actions, feedback, redmail_actions, speaker
 from .audio import ChunkStream, microphone_stream
+from .signal_level import rms16
 from .commands import CommandRegistry
 from .config import Config
 from .recognizer import SpeechRecognizer, resolve_model_path, resolve_spk_model_path
@@ -47,7 +48,8 @@ class Assistant:
             end_silence_seconds=config.recognition_end_silence_seconds,
         )
         self._chunks: ChunkStream | None = None
-        self._partial_since: tuple[str, float] | None = None
+        self._speech_seen = False  # была ли речь (уровень выше порога) в текущей фразе
+        self._silence_since: float | None = None  # с какого момента уровень ниже порога
         # Движок голосового ответа (Piper) — фиксированные фразы
         # синтезируются в фоне, пока грузится всё остальное.
         if config.feedback.speech:
@@ -87,29 +89,39 @@ class Assistant:
 
     def _accept(self, chunk: bytes) -> str | None:
         """Отдать чанк движку; вернуть финальный текст фразы, если она
-        закончилась. Конец фразы — либо по детектору Vosk, либо по нашему
-        правилу: промежуточный результат не пуст и не менялся дольше
-        recognition_end_silence_seconds (vosk 0.3.45 не даёт настроить
-        собственный детектор, а он ждёт ~1 с после короткой команды)."""
-        final = self._accept(chunk)
+        закончилась.
+
+        Конец фразы — по детектору Vosk (паузы из model.conf, см.
+        model_overlay) либо по уровню сигнала с микрофона: после того как
+        была речь (уровень выше vad_silence_rms), уровень держится ниже
+        порога дольше recognition_end_silence_seconds и промежуточный
+        результат не пуст. Именно по уровню, а не по «стабильности»
+        промежуточного результата: тот отстаёт от речи и на проверке
+        замирал за секунду до её конца — так фразы резались бы на ходу."""
+        final = self.recognizer.accept_chunk(chunk)
         if final is not None:
-            self._partial_since = None
+            self._speech_seen = False
+            self._silence_since = None
             return final
         silence = self.config.recognition_end_silence_seconds
-        if not silence:
+        threshold = self.config.vad_silence_rms
+        if not silence or not threshold:
             return None
-        partial = self.recognizer.partial_text()
+        level = rms16(chunk)
         now = time.monotonic()
-        if not partial:
-            self._partial_since = None
+        if level >= threshold:
+            self._speech_seen = True
+            self._silence_since = None
             return None
-        if self._partial_since is None or self._partial_since[0] != partial:
-            self._partial_since = (partial, now)
+        if not self._speech_seen:
             return None
-        # Страховка на случай, если детектор Vosk (правила из model.conf,
-        # см. model_overlay) не сработал: ждём в полтора раза дольше него.
-        if now - self._partial_since[1] >= silence * 1.5:
-            self._partial_since = None
+        if self._silence_since is None:
+            self._silence_since = now
+            return None
+        if now - self._silence_since >= silence and self.recognizer.partial_text():
+            log.debug("Тишина %.2f с после речи (уровень %d < %d) — завершаю фразу", now - self._silence_since, level, threshold)
+            self._speech_seen = False
+            self._silence_since = None
             return self.recognizer.finalize()
         return None
 

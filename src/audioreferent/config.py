@@ -107,6 +107,9 @@ class Config:
     recognition_endpointing: str = "short"
     recognition_end_silence_seconds: float | None = 0.4
     audio_block_samples: int = 4000
+    # Порог уровня (RMS PCM16, 0..32767), ниже которого чанк считается
+    # тишиной для собственного завершения фразы (0 — не использовать).
+    vad_silence_rms: int = 300
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -133,6 +136,7 @@ class Config:
             recognition_endpointing=data.get("recognition_endpointing", "short"),
             recognition_end_silence_seconds=data.get("recognition_end_silence_seconds", 0.4),
             audio_block_samples=int(data.get("audio_block_samples", 4000)),
+            vad_silence_rms=int(data.get("vad_silence_rms", 300)),
         )
 
 
@@ -225,6 +229,7 @@ def save_config(cfg: Config) -> None:
         "recognition_endpointing": cfg.recognition_endpointing,
         "recognition_end_silence_seconds": cfg.recognition_end_silence_seconds,
         "audio_block_samples": cfg.audio_block_samples,
+        "vad_silence_rms": cfg.vad_silence_rms,
     }
     # Список команд пишем ТОЛЬКО если он отличается от умолчаний пакета.
     # Иначе каждое «Сохранить» в GUI замораживало бы в пользовательском

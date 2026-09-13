@@ -92,15 +92,20 @@ class SpeechRecognizer:
         try/except: в старых vosk этих методов нет — тогда остаётся
         поведение по умолчанию."""
         modes = getattr(vosk, "EndpointerMode", None)
+        if modes is None or not hasattr(self._recognizer, "SetEndpointerDelays"):
+            # vosk 0.3.45 (текущий на PyPI): API нет, паузы задаются через
+            # оверлей model.conf (model_overlay.py) — это штатный путь.
+            log.debug("В этой версии vosk нет API детектора конца фразы — используется model.conf")
+            return
         try:
-            if modes is not None and endpointing in ENDPOINTING_MODES and endpointing != "default":
-                mode = modes.ANSWER_SHORT if endpointing == "short" else modes.ANSWER_LONG
+            if endpointing in ENDPOINTING_MODES and endpointing != "default":
+                mode = modes.SHORT if endpointing == "short" else modes.LONG
                 self._recognizer.SetEndpointerMode(mode)
             if end_silence_seconds:
                 # (макс. тишина в начале, тишина после уверенной речи, макс. тишина после речи)
                 self._recognizer.SetEndpointerDelays(5.0, float(end_silence_seconds), float(end_silence_seconds) * 2)
         except Exception as exc:  # noqa: BLE001 — необязательная настройка
-            log.warning("Настройка определения конца фразы недоступна в этой версии vosk: %s", exc)
+            log.warning("Настройка определения конца фразы не применилась: %s", exc)
 
     def reset(self) -> None:
         self._recognizer.Reset()
