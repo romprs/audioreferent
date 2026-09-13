@@ -368,6 +368,7 @@ def handle_form_phrase(
 _STEM_TAIL = set("аеёийоуыьюя")
 _COUNT_WORDS = {2: "двое", 3: "трое", 4: "четверо", 5: "пятеро", 6: "шестеро", 7: "семеро", 8: "восемь", 9: "девять"}
 _MAX_LISTED_CANDIDATES = 4
+_TOO_MANY_CANDIDATES = 10
 
 #: Кандидаты последней неоднозначности (dict name/email), см. выше.
 _pending_candidates: list[dict] = []
@@ -442,7 +443,10 @@ def _set_participants(name_words: list[str]) -> FormReply:
 
     if added:
         _redmail_event_form_set(add_participants=[c["email"] for c in added])
-    _pending_candidates[:] = [c for _window, cs in ambiguous for c in cs]
+    # Кандидатов запоминаем только когда их обозримо мало: одиночное имя
+    # («александр» — 253 контакта) уточнять именем бессмысленно, тут
+    # нужна фамилия, и следующее слово не должно выбирать из этих сотен.
+    _pending_candidates[:] = [c for _window, cs in ambiguous if len(cs) <= _TOO_MANY_CANDIDATES for c in cs]
 
     parts: list[str] = []
     if added:
@@ -450,7 +454,9 @@ def _set_participants(name_words: list[str]) -> FormReply:
     for window, contacts in ambiguous:
         who = " ".join(window).capitalize()
         count = _COUNT_WORDS.get(len(contacts), str(len(contacts)))
-        if len(contacts) <= _MAX_LISTED_CANDIDATES:
+        if len(contacts) > _TOO_MANY_CANDIDATES:
+            parts.append(f"{who}: совпадений слишком много, назовите фамилию")
+        elif len(contacts) <= _MAX_LISTED_CANDIDATES:
             parts.append(f"{who}: найдено {count} — {', '.join(_given_names(c, window) for c in contacts)}. Уточните имя")
         else:
             parts.append(f"{who}: найдено {count}, уточните имя")

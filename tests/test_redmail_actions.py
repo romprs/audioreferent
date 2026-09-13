@@ -312,6 +312,16 @@ def test_bare_name_answers_the_clarification_question():
     assert _form_phrase("евгений") == redmail_actions.FormReply(handled=False)
 
 
+def test_lone_first_name_with_too_many_matches_asks_for_surname():
+    many = [{"name": f"Фамилия{i} Александр", "email": f"a{i}@x"} for i in range(12)]
+    redmail_actions._pending_candidates.clear()
+    with patch(FORM + "_redmail_find_contacts", return_value=many), patch(FORM + "_redmail_event_form_set") as mock_set:
+        reply = _form_phrase("участников александр")  # «участников» — падежная форма слова-поля
+    mock_set.assert_not_called()
+    assert reply.spoken == "Александр: совпадений слишком много, назовите фамилию"
+    assert redmail_actions._pending_candidates == []  # сотни кандидатов не запоминаем
+
+
 def test_participants_not_found_names_who():
     reply, mock_set = _participants("пригласить жилкин")
     mock_set.assert_not_called()
