@@ -115,6 +115,15 @@ class SpeechRecognizer:
     def partial_text(self) -> str:
         return json.loads(self._recognizer.PartialResult()).get("partial", "")
 
+    def finalize(self) -> str:
+        """Принудительно завершить фразу и отдать её текст — когда
+        промежуточный результат не меняется дольше паузы (см.
+        assistant._accept): vosk 0.3.45 не даёт настроить свой детектор
+        конца фразы, и ждать его ~1 с после каждой короткой команды долго."""
+        result = json.loads(self._recognizer.FinalResult())
+        self._last_speaker_vector = result.get("spk")
+        return result.get("text", "")
+
     @property
     def last_speaker_vector(self) -> list[float] | None:
         return self._last_speaker_vector

@@ -36,14 +36,15 @@ voice_lock_threshold: 0.5
 # Сколько секунд после активационного слова ждать команду
 command_timeout_seconds: 6
 
-# Скорость отклика распознавания. recognition_endpointing — как быстро Vosk
-# решает, что фраза закончилась: short (~0,5 с тишины, быстрее ответ на
-# короткие команды), default, long (для длинной диктовки с паузами).
-# recognition_end_silence_seconds — явная пауза после речи в секундах, null
-# — по режиму. audio_block_samples — размер блока с микрофона: 4000 сэмплов
-# = 0,25 с (меньше — меньше задержка).
+# Скорость отклика распознавания. recognition_end_silence_seconds — через
+# сколько секунд неизменного промежуточного результата фраза считается
+# законченной (собственный детектор Vosk 0.3.45 не настраивается и ждёт
+# ~1 с; null — полагаться только на него). Меньше — быстрее ответ, но
+# пауза посреди фразы разорвёт её. recognition_endpointing (short/default/
+# long) — режим детектора Vosk, действует в версиях, где он настраивается.
+# audio_block_samples — размер блока с микрофона: 4000 сэмплов = 0,25 с.
 recognition_endpointing: short
-recognition_end_silence_seconds: null
+recognition_end_silence_seconds: 0.6
 audio_block_samples: 4000
 
 # Режим заполнения формы встречи ("вика создай встречу" -> окно redmail,

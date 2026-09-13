@@ -47,6 +47,7 @@ class Assistant:
             end_silence_seconds=config.recognition_end_silence_seconds,
         )
         self._chunks: ChunkStream | None = None
+        self._partial_since: tuple[str, float] | None = None
         # Движок голосового ответа (Piper) — фиксированные фразы
         # синтезируются в фоне, пока грузится всё остальное.
         if config.feedback.speech:
@@ -81,6 +82,34 @@ class Assistant:
             if dropped:
                 log.debug("Сброшено %d чанков аудио, записанных во время ответа", dropped)
         self.recognizer.reset()
+
+    # -- распознавание -----------------------------------------------------
+
+    def _accept(self, chunk: bytes) -> str | None:
+        """Отдать чанк движку; вернуть финальный текст фразы, если она
+        закончилась. Конец фразы — либо по детектору Vosk, либо по нашему
+        правилу: промежуточный результат не пуст и не менялся дольше
+        recognition_end_silence_seconds (vosk 0.3.45 не даёт настроить
+        собственный детектор, а он ждёт ~1 с после короткой команды)."""
+        final = self._accept(chunk)
+        if final is not None:
+            self._partial_since = None
+            return final
+        silence = self.config.recognition_end_silence_seconds
+        if not silence:
+            return None
+        partial = self.recognizer.partial_text()
+        now = time.monotonic()
+        if not partial:
+            self._partial_since = None
+            return None
+        if self._partial_since is None or self._partial_since[0] != partial:
+            self._partial_since = (partial, now)
+            return None
+        if now - self._partial_since[1] >= silence:
+            self._partial_since = None
+            return self.recognizer.finalize()
+        return None
 
     # -- команды ---------------------------------------------------------
 
@@ -150,7 +179,7 @@ class Assistant:
             wake_alerted = False
             for chunk in chunks:
                 if state == "idle":
-                    final = self.recognizer.accept_chunk(chunk)
+                    final = self._accept(chunk)
                     if final:
                         log.info("Распознано (в режиме ожидания активации): %r", final)
                     text = final if final is not None else self.recognizer.partial_text()
@@ -232,7 +261,7 @@ class Assistant:
                         state = "idle"
                         self.recognizer.reset()
                         continue
-                    final = self.recognizer.accept_chunk(chunk)
+                    final = self._accept(chunk)
                     if final is not None:
                         if final.strip():
                             if self._on_command(final):
@@ -248,7 +277,7 @@ class Assistant:
                         state = "idle"
                         self.recognizer.reset()
                         continue
-                    final = self.recognizer.accept_chunk(chunk)
+                    final = self._accept(chunk)
                     if final is None or not final.strip():
                         continue
                     log.info("Распознано (режим заполнения): %r", final)
