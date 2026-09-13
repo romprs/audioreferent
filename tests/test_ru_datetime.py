@@ -31,6 +31,14 @@ def test_absolute_date_ordinal_word_compound():
     assert ru_datetime.parse_date("двадцать пятое сентября", today=TODAY) == date(2026, 9, 25)
 
 
+def test_absolute_date_ordinal_genitive():
+    # «отмени встречу тест пятнадцатого сентября», «на двадцать первого»
+    assert ru_datetime.parse_date("пятнадцатого сентября", today=TODAY) == date(2026, 9, 15)
+    assert ru_datetime.parse_date("двадцать первого сентября", today=TODAY) == date(2026, 9, 21)
+    subject, on_date, _ = ru_datetime.extract("тест пятнадцатого сентября", today=TODAY)
+    assert (subject, on_date) == ("тест", date(2026, 9, 15))
+
+
 def test_date_without_year_is_always_current_year():
     # договорённость: год не назван -> всегда текущий, даже если дата уже прошла
     assert ru_datetime.parse_date("1 января", today=TODAY) == date(2026, 1, 1)

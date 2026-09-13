@@ -40,7 +40,11 @@ class Assistant:
                 log.info("Проверка голоса включена: %d образец(ов)", len(enrolled))
 
         self.recognizer = SpeechRecognizer(
-            model_path, config.sample_rate, spk_model_path=spk_model_path if self.speaker_verifier else None
+            model_path,
+            config.sample_rate,
+            spk_model_path=spk_model_path if self.speaker_verifier else None,
+            endpointing=config.recognition_endpointing,
+            end_silence_seconds=config.recognition_end_silence_seconds,
         )
         self._chunks: ChunkStream | None = None
         # Движок голосового ответа (Piper) — фиксированные фразы
@@ -137,7 +141,9 @@ class Assistant:
     # -- главный цикл ------------------------------------------------------
 
     def run(self) -> None:
-        with microphone_stream(self.config.sample_rate, self.config.input_device) as chunks:
+        with microphone_stream(
+            self.config.sample_rate, self.config.input_device, blocksize=self.config.audio_block_samples
+        ) as chunks:
             self._chunks = chunks
             state = "idle"
             deadline = 0.0

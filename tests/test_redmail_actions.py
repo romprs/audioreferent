@@ -103,9 +103,10 @@ def test_reschedule_requires_na_separator():
         redmail_actions.redmail_reschedule_event({"remainder": "совещание в десять"})
 
 
-def test_reschedule_requires_new_time():
+def test_reschedule_requires_new_date_or_time():
+    # ни даты, ни времени после «на» — переносить некуда
     with pytest.raises(ActionError, match="время"):
-        redmail_actions.redmail_reschedule_event({"remainder": "совещание на завтра"})
+        redmail_actions.redmail_reschedule_event({"remainder": "совещание на потом"})
 
 
 def test_reschedule_no_matching_event():
@@ -253,9 +254,12 @@ BOOK = [
 ]
 
 
-def _fake_find_contacts(query: str) -> list[dict]:
+def _fake_find_contacts(query: str, fuzzy: bool = False) -> list[dict]:
     """Та же логика, что у redmail.ipc_server.match_contacts: все слова
-    запроса должны совпасть с каким-то словом контакта."""
+    запроса должны совпасть с каким-то словом контакта. Нечёткий поиск в
+    тестах — только для «бутько» -> Будько."""
+    if fuzzy:
+        return [c for c in BOOK if c["name"].startswith("Будько")] if query == "бутько" else []
     return redmail_actions._local_matches(query.split(), BOOK)
 
 
@@ -268,24 +272,25 @@ def _participants(phrase: str):
     return reply, mock_set
 
 
-def test_participants_single_match_is_added_and_named():
+def test_participants_single_match_is_added_silently():
+    # уникальные — молча: видны в списке под полем, перечисление утомляет
     reply, mock_set = _participants("участники будько и пономарева")
     mock_set.assert_called_once_with(add_participants=["budko@example.com", "ponomarev@example.com"])
-    assert reply.spoken == "Добавлены: Будько Евгений, Пономарев Роман"
-    assert reply.spoken_fallback is None
+    assert reply == redmail_actions.FormReply(handled=True)
 
 
 def test_participants_words_are_grouped_into_one_person():
     # «шилкин евгений александрович» — один запрос, а не три слова порознь
     reply, mock_set = _participants("участники шилкин евгений александрович")
     mock_set.assert_called_once_with(add_participants=["shilkin.e@example.com"])
-    assert reply.spoken == "Добавлен Шилкин Евгений Александрович"
+    assert reply.spoken is None
 
 
 def test_participants_ambiguous_surname_lists_candidates_and_asks():
+    # книгу открыть нельзя (redmail недоступен в тесте) — запасной голосовой вариант
     reply, mock_set = _participants("участник шилкин")
     mock_set.assert_not_called()
-    assert reply.spoken == "Шилкин: найдено двое — Александр, Евгений Александрович. Уточните имя"
+    assert reply.spoken == "Шилкин: найдено несколько — Александр, Евгений Александрович. Уточните имя"
     assert reply.spoken_fallback == "Участник не найден"
     # уточнение одним именем выбирает среди запомненных кандидатов
     with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(
@@ -293,7 +298,19 @@ def test_participants_ambiguous_surname_lists_candidates_and_asks():
     ) as mock_set2:
         follow_up = _form_phrase("участники евгений")
     mock_set2.assert_called_once_with(add_participants=["shilkin.e@example.com"])
-    assert follow_up.spoken == "Добавлен Шилкин Евгений Александрович"
+    assert follow_up.spoken is None
+
+
+def test_similar_surname_opens_book_on_the_real_spelling():
+    redmail_actions._picker_open = False
+    with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(
+        FORM + "_redmail_event_form_set"
+    ) as mock_set, patch(FORM + "_redmail_picker_open", return_value={"query": "Будько", "candidates": []}) as mock_open:
+        reply = _form_phrase("участники бутько")
+    mock_set.assert_not_called()
+    mock_open.assert_called_once_with("Будько")  # фильтр — настоящая фамилия, а не услышанное
+    assert reply.spoken == "Бутько: точно не нашла, похожие на экране — выберите номер и скажите принять"
+    redmail_actions._picker_open = False
 
 
 def test_bare_name_answers_the_clarification_question():
@@ -302,7 +319,7 @@ def test_bare_name_answers_the_clarification_question():
         FORM + "_redmail_event_form_set"
     ) as mock_set:
         reply = _form_phrase("евгений")  # без слова «участники»
-    assert reply.handled and reply.spoken == "Добавлен Шилкин Евгений Александрович"
+    assert reply.handled and reply.spoken is None
     mock_set.assert_called_once_with(add_participants=["shilkin.e@example.com"])
     # в режиме ожидания такое имя тоже считается фразой формы
     _participants("участник шилкин")
@@ -338,9 +355,7 @@ def test_ambiguous_surname_opens_picker_and_describes_numbered_candidates():
         reply = _form_phrase("участники шилкин")
     mock_set.assert_not_called()
     mock_open.assert_called_once_with("шилкин")
-    assert reply.spoken == (
-        "Шилкин: двое — первый Александр, второй Евгений Александрович. Номер или имя, затем принять"
-    )
+    assert reply.spoken == "Шилкин: найдено несколько — выберите номер и скажите принять"
     assert redmail_actions.picker_is_open()
     # книга открыта -> любая фраза считается фразой формы даже без активационного слова
     assert redmail_actions.looks_like_form_phrase("второй", wake_word="вика", fuzzy_threshold=1)
@@ -364,7 +379,7 @@ def test_ambiguous_surname_opens_picker_and_describes_numbered_candidates():
         mock_select.assert_called_once_with(all_visible=True, checked=True)
     with patch(FORM + "_redmail_picker_accept", return_value=[{"name": "Шилкин Евгений Александрович", "email": "e@x"}]):
         reply = _form_phrase("принять")
-    assert reply.spoken == "Участники: Шилкин Евгений Александрович" and not reply.finished
+    assert reply == redmail_actions.FormReply(handled=True)  # после «принять» — только сигнал
     assert not redmail_actions.picker_is_open()
 
 
@@ -377,7 +392,7 @@ def test_number_and_accept_in_one_phrase():
         reply = _form_phrase("два принять")
     mock_select.assert_called_once_with(number=2, checked=True)
     mock_accept.assert_called_once()
-    assert reply.spoken == "Участники: Шилкин Евгений Александрович"
+    assert reply == redmail_actions.FormReply(handled=True)
     assert not redmail_actions.picker_is_open()
 
 
@@ -399,20 +414,14 @@ def test_second_ambiguous_surname_is_queued_and_opened_after_accept():
     ):
         reply = _form_phrase("участники будько шилкин шапошников")
         mock_set.assert_called_once_with(add_participants=["budko@example.com"])
-        assert opens == ["шилкин"]  # книга открыта для первой фамилии
-        assert reply.spoken == (
-            "Добавлен Будько Евгений. Шилкин: двое — первый Александр, второй Евгений Александрович. "
-            "Номер или имя, затем принять. Шапошников: двое — спрошу следом"
-        )
+        assert opens == ["шилкин"]  # книга открыта для первой фамилии, Будько добавлен молча
+        assert reply.spoken == "Шилкин: найдено несколько — выберите номер и скажите принять"
         with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}), patch(
             FORM + "_redmail_picker_accept", return_value=[shilkins[1]]
         ):
             reply = _form_phrase("второй принять")
         assert opens == ["шилкин", "шапошников"]  # после «принять» открылась книга для следующей фамилии
-        assert reply.spoken == (
-            "Участники: Шилкин Евгений Александрович. Далее Шапошников: двое — первый Андрей, второй Алевтина. "
-            "Номер или имя, затем принять"
-        )
+        assert reply.spoken == "Шапошников: найдено несколько — выберите номер и скажите принять"
         assert redmail_actions.picker_is_open()
     redmail_actions._picker_open = False
 
@@ -434,7 +443,7 @@ def test_picker_falls_back_to_spoken_list_when_book_cannot_open():
         FORM + "_redmail_event_form_set"
     ), patch(FORM + "_redmail_picker_open", side_effect=RedmailError("Форма встречи не открыта.")):
         reply = _form_phrase("участники шилкин")
-    assert reply.spoken == "Шилкин: найдено двое — Александр, Евгений Александрович. Уточните имя"
+    assert reply.spoken == "Шилкин: найдено несколько — Александр, Евгений Александрович. Уточните имя"
     assert not redmail_actions.picker_is_open()
 
 
@@ -447,7 +456,7 @@ def test_open_address_book_command_and_cancel():
     with patch(FORM + "_redmail_picker_cancel") as mock_cancel:
         reply = _form_phrase("отмена")
     mock_cancel.assert_called_once()
-    assert reply.spoken == "Книга закрыта" and not redmail_actions.picker_is_open()
+    assert reply.spoken == "Отмена" and not redmail_actions.picker_is_open()
 
 
 def test_dobav_keyword_and_list_participants():
@@ -456,7 +465,7 @@ def test_dobav_keyword_and_list_participants():
     # «добавь будько» — то же, что «участники будько»
     reply, mock_set = _participants("добавь будько")
     mock_set.assert_called_once_with(add_participants=["budko@example.com"])
-    assert reply.spoken == "Добавлен Будько Евгений"
+    assert reply.spoken is None
     # имена запомнены -> «назови участников» читает их по адресам из формы
     with patch(FORM + "_redmail_event_form_state", return_value={"participants": ["budko@example.com", "ponomarev@example.com"]}), patch(
         FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts
@@ -472,17 +481,26 @@ def test_dobav_keyword_and_list_participants():
 def test_participants_not_found_names_who():
     reply, mock_set = _participants("пригласить жилкин")
     mock_set.assert_not_called()
-    assert reply.spoken == "Участник Жилкин не найден"
+    assert reply.spoken == "Жилкин не найден"
     assert reply.spoken_fallback == "Участник не найден"
 
 
 def test_participants_mixed_outcomes_in_one_phrase():
     reply, mock_set = _participants("участники будько шилкин жилкин")
     mock_set.assert_called_once_with(add_participants=["budko@example.com"])
+    # Будько добавлен молча; книга недоступна -> голосовой запасной вариант
     assert reply.spoken == (
-        "Добавлен Будько Евгений. Шилкин: найдено двое — Александр, Евгений Александрович. Уточните имя. "
-        "Участник Жилкин не найден"
+        "Шилкин: найдено несколько — Александр, Евгений Александрович. Уточните имя. Жилкин не найден"
     )
+
+
+def test_reschedule_with_date_only_keeps_the_event_time():
+    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-1", start="2026-09-08T07:30:00+00:00")]), patch(
+        FORM + "_redmail_update_event"
+    ) as mock_update, patch(FORM + "_local_hour_minute", return_value=(10, 30)), patch(FORM + "date_cls") as mock_date:
+        mock_date.today.return_value = TODAY
+        redmail_actions.redmail_reschedule_event({"remainder": "планёрка на пятнадцатого сентября"})
+    mock_update.assert_called_once_with("uid-1", start="2026-09-15T10:30:00")  # родительный падеж даты, время прежнее
 
 
 def test_form_phrase_date_with_time_sets_both():

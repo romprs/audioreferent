@@ -198,10 +198,15 @@ def contact_picker_cancel() -> None:
     send_request("contact_picker_cancel")
 
 
-def find_contacts(query: str) -> list[dict]:
+def find_contacts(query: str, *, fuzzy: bool = False) -> list[dict]:
     """Контакты адресной книги по фамилии/имени, как их слышно в речи
-    (redmail сам сравнивает основы слов: «Шилкина» -> Шилкин)."""
-    contacts = send_request("find_contacts", {"query": query}).get("contacts", [])
+    (redmail сам сравнивает основы слов: «Шилкина» -> Шилкин). fuzzy —
+    с допуском на 1-2 ошибки распознавания («бутько» -> Будько), от самых
+    похожих."""
+    args: dict[str, Any] = {"query": query}
+    if fuzzy:
+        args["fuzzy"] = True
+    contacts = send_request("find_contacts", args).get("contacts", [])
     return contacts if isinstance(contacts, list) else []
 
 

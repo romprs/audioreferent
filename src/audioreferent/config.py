@@ -100,6 +100,13 @@ class Config:
     piper_binary_path: str | None = None
     piper_voices_dir: str | None = None
     piper_voice: str = "ru_RU-irina-medium"
+    # Скорость отклика распознавания (см. recognizer.py / audio.py):
+    # режим конца фразы Vosk (short/default/long), явная пауза тишины после
+    # речи в секундах (null — по режиму) и размер аудиоблока в сэмплах
+    # (меньше — меньше задержка, чуть больше нагрузка; 4000 = 0,25 с).
+    recognition_endpointing: str = "short"
+    recognition_end_silence_seconds: float | None = None
+    audio_block_samples: int = 4000
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -123,6 +130,9 @@ class Config:
             piper_binary_path=data.get("piper_binary_path"),
             piper_voices_dir=data.get("piper_voices_dir"),
             piper_voice=data.get("piper_voice", "ru_RU-irina-medium"),
+            recognition_endpointing=data.get("recognition_endpointing", "short"),
+            recognition_end_silence_seconds=data.get("recognition_end_silence_seconds"),
+            audio_block_samples=int(data.get("audio_block_samples", 4000)),
         )
 
 
@@ -212,6 +222,9 @@ def save_config(cfg: Config) -> None:
         "piper_binary_path": cfg.piper_binary_path,
         "piper_voices_dir": cfg.piper_voices_dir,
         "piper_voice": cfg.piper_voice,
+        "recognition_endpointing": cfg.recognition_endpointing,
+        "recognition_end_silence_seconds": cfg.recognition_end_silence_seconds,
+        "audio_block_samples": cfg.audio_block_samples,
     }
     # Список команд пишем ТОЛЬКО если он отличается от умолчаний пакета.
     # Иначе каждое «Сохранить» в GUI замораживало бы в пользовательском

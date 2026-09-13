@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
 import vosk
 
 vosk.SetLogLevel(-1)  # не засорять stdout служебными логами Kaldi
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MODEL_LOCATIONS = [
     # Куда RPM кладёт заранее подготовленную (без rescore/rnnlm, см.
@@ -53,14 +56,45 @@ def resolve_spk_model_path(configured_path: str | None) -> str | None:
     return str(default) if default.is_dir() else None
 
 
+#: Режимы определения конца фразы Vosk (сколько тишины после речи ждать,
+#: прежде чем выдать финальный результат): short — заметно быстрее отклик
+#: на короткие команды, long — для длинной диктовки с паузами.
+ENDPOINTING_MODES = ("short", "default", "long")
+
+
 class SpeechRecognizer:
-    def __init__(self, model_path: str, sample_rate: int, spk_model_path: str | None = None):
+    def __init__(
+        self,
+        model_path: str,
+        sample_rate: int,
+        spk_model_path: str | None = None,
+        *,
+        endpointing: str = "short",
+        end_silence_seconds: float | None = None,
+    ):
         self._model = vosk.Model(model_path)
         self._sample_rate = sample_rate
         self._recognizer = vosk.KaldiRecognizer(self._model, sample_rate)
         self._last_speaker_vector: list[float] | None = None
         if spk_model_path:
             self._recognizer.SetSpkModel(vosk.SpkModel(spk_model_path))
+        self._configure_endpointing(endpointing, end_silence_seconds)
+
+    def _configure_endpointing(self, endpointing: str, end_silence_seconds: float | None) -> None:
+        """Быстрее конец фразы = быстрее ответ: в режиме short Vosk выдаёт
+        финальный результат после ~0,5 с тишины вместо ~1 с. Всё в
+        try/except: в старых vosk этих методов нет — тогда остаётся
+        поведение по умолчанию."""
+        modes = getattr(vosk, "EndpointerMode", None)
+        try:
+            if modes is not None and endpointing in ENDPOINTING_MODES and endpointing != "default":
+                mode = modes.ANSWER_SHORT if endpointing == "short" else modes.ANSWER_LONG
+                self._recognizer.SetEndpointerMode(mode)
+            if end_silence_seconds:
+                # (макс. тишина в начале, тишина после уверенной речи, макс. тишина после речи)
+                self._recognizer.SetEndpointerDelays(5.0, float(end_silence_seconds), float(end_silence_seconds) * 2)
+        except Exception as exc:  # noqa: BLE001 — необязательная настройка
+            log.warning("Настройка определения конца фразы недоступна в этой версии vosk: %s", exc)
 
     def reset(self) -> None:
         self._recognizer.Reset()
