@@ -163,6 +163,41 @@ def event_form_cancel() -> None:
     send_request("event_form_cancel")
 
 
+# --- адресная книга поверх открытой формы (contact_picker_* в redmail) ---
+
+
+def contact_picker_open(query: str = "") -> dict:
+    """Открыть книгу с фильтром; ответ — {"query", "candidates": [{number,
+    name, email, checked}]} для видимых строк."""
+    return send_request("contact_picker_open", {"query": query}).get("picker", {})
+
+
+def contact_picker_select(
+    *, number: int | None = None, query: str | None = None, all_visible: bool = False, checked: bool = True
+) -> dict:
+    args: dict[str, Any] = {"checked": checked}
+    if number is not None:
+        args["number"] = number
+    if query:
+        args["query"] = query
+    if all_visible:
+        args["all"] = True
+    return send_request("contact_picker_select", args).get("picker", {})
+
+
+def contact_picker_state() -> dict:
+    return send_request("contact_picker_state").get("picker", {})
+
+
+def contact_picker_accept() -> list[dict]:
+    selected = send_request("contact_picker_accept").get("selected", [])
+    return selected if isinstance(selected, list) else []
+
+
+def contact_picker_cancel() -> None:
+    send_request("contact_picker_cancel")
+
+
 def find_contacts(query: str) -> list[dict]:
     """Контакты адресной книги по фамилии/имени, как их слышно в речи
     (redmail сам сравнивает основы слов: «Шилкина» -> Шилкин)."""

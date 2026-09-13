@@ -322,6 +322,75 @@ def test_lone_first_name_with_too_many_matches_asks_for_surname():
     assert redmail_actions._pending_candidates == []  # сотни кандидатов не запоминаем
 
 
+# --- адресная книга на экране ---------------------------------------------
+
+
+def _picker_state(query, candidates):
+    return {"query": query, "candidates": [dict(c, number=i + 1, checked=False) for i, c in enumerate(candidates)]}
+
+
+def test_ambiguous_surname_opens_picker_and_describes_numbered_candidates():
+    redmail_actions._picker_open = False
+    shilkins = [c for c in BOOK if c["name"].startswith("Шилкин")]
+    with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(
+        FORM + "_redmail_event_form_set"
+    ) as mock_set, patch(FORM + "_redmail_picker_open", return_value=_picker_state("шилкин", shilkins)) as mock_open:
+        reply = _form_phrase("участники шилкин")
+    mock_set.assert_not_called()
+    mock_open.assert_called_once_with("шилкин")
+    assert reply.spoken == (
+        "Шилкин: найдено двое — первый Александр, второй Евгений Александрович. "
+        "Назовите номер или имя, затем скажите принять"
+    )
+    assert redmail_actions.picker_is_open()
+    # книга открыта -> любая фраза считается фразой формы даже без активационного слова
+    assert redmail_actions.looks_like_form_phrase("второй", wake_word="вика", fuzzy_threshold=1)
+
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
+        assert _form_phrase("второй") == redmail_actions.FormReply(handled=True)
+        mock_select.assert_called_once_with(number=2, checked=True)
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
+        _form_phrase("первый и третий")
+        assert [c[1]["number"] for c in mock_select.call_args_list] == [1, 3]
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
+        _form_phrase("убери второго")
+        mock_select.assert_called_once_with(number=2, checked=False)
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
+        _form_phrase("евгений")
+        mock_select.assert_called_once_with(query="евгений", checked=True)
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 0}):
+        assert _form_phrase("сидоров").spoken == "Сидоров: в списке нет"
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 2}) as mock_select:
+        _form_phrase("все")
+        mock_select.assert_called_once_with(all_visible=True, checked=True)
+    with patch(FORM + "_redmail_picker_accept", return_value=[{"name": "Шилкин Евгений Александрович", "email": "e@x"}]):
+        reply = _form_phrase("принять")
+    assert reply.spoken == "Участники: Шилкин Евгений Александрович" and not reply.finished
+    assert not redmail_actions.picker_is_open()
+
+
+def test_picker_falls_back_to_spoken_list_when_book_cannot_open():
+    redmail_actions._picker_open = False
+    with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(
+        FORM + "_redmail_event_form_set"
+    ), patch(FORM + "_redmail_picker_open", side_effect=RedmailError("Форма встречи не открыта.")):
+        reply = _form_phrase("участники шилкин")
+    assert reply.spoken == "Шилкин: найдено двое — Александр, Евгений Александрович. Уточните имя"
+    assert not redmail_actions.picker_is_open()
+
+
+def test_open_address_book_command_and_cancel():
+    redmail_actions._picker_open = False
+    with patch(FORM + "_redmail_picker_open", return_value=_picker_state("шапошников", [{"name": "Шапошников Андрей", "email": "s@x"}])) as mock_open:
+        reply = _form_phrase("открой адресную книгу шапошников")
+    mock_open.assert_called_once_with("шапошников")
+    assert reply.spoken.startswith("Адресная книга открыта, в списке 1")
+    with patch(FORM + "_redmail_picker_cancel") as mock_cancel:
+        reply = _form_phrase("отмена")
+    mock_cancel.assert_called_once()
+    assert reply.spoken == "Книга закрыта" and not redmail_actions.picker_is_open()
+
+
 def test_participants_not_found_names_who():
     reply, mock_set = _participants("пригласить жилкин")
     mock_set.assert_not_called()
