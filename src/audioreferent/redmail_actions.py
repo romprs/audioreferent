@@ -263,7 +263,13 @@ def redmail_event_form(args: dict[str, Any]) -> FormSession:
 
 
 def _form_closed(exc: RedmailError) -> bool:
-    return isinstance(exc, RedmailNotRunning) or "не открыта" in str(exc)
+    # Именно форма: «Адресная книга не открыта» — другой случай (книгу
+    # закрыли мышью), режим заполнения при этом продолжается.
+    return isinstance(exc, RedmailNotRunning) or "Форма встречи не открыта" in str(exc)
+
+
+def _picker_closed(exc: RedmailError) -> bool:
+    return "Адресная книга не открыта" in str(exc)
 
 
 def handle_form_phrase(
@@ -285,7 +291,9 @@ def handle_form_phrase(
     rest = " ".join(rest_words)
 
     if _picker_open:
-        return handle_picker_phrase(tokens)
+        reply = handle_picker_phrase(tokens)
+        if reply is not None:
+            return reply
     opened = _open_picker_command(tokens)
     if opened is not None:
         return opened
@@ -466,13 +474,17 @@ def _set_participants(name_words: list[str]) -> FormReply:
         count = _COUNT_WORDS.get(len(contacts), str(len(contacts)))
         # Неоднозначность — открываем книгу на экране с этим фильтром
         # (гибрид): человек видит кандидатов и выбирает номером/именем.
-        # Одну книгу за раз: вторую неоднозначность в той же фразе только
-        # называем.
+        # Одна книга за раз: остальные фамилии из той же фразы встают в
+        # очередь и открываются по одной после «принять».
         if not _picker_open:
             described = _open_picker_for(window, contacts)
             if described is not None:
                 parts.append(described)
                 continue
+        else:
+            _picker_queue.append((window, contacts))
+            parts.append(f"{who}: {count} — спрошу следом")
+            continue
         if len(contacts) > _TOO_MANY_CANDIDATES:
             parts.append(f"{who}: совпадений слишком много, назовите фамилию")
         elif len(contacts) <= _MAX_LISTED_CANDIDATES:
@@ -534,16 +546,33 @@ def _picker_numbers(tokens: list[str]) -> list[int]:
     return numbers
 
 
+#: Неоднозначные фамилии, ждущие своей книги: (слова запроса, кандидаты).
+#: Книга одна за раз — следующая открывается после «принять»/«отмена».
+_picker_queue: list[tuple[list[str], list[dict]]] = []
+
+
 def _describe_candidates(who: str, candidates: list[dict], query_words: list[str]) -> str:
-    """«Шилкин: найдено двое — первый Александр, второй Евгений
-    Александрович» по видимым строкам книги (номера — как на экране)."""
+    """«Шилкин: двое — первый Александр, второй Евгений Александрович» по
+    видимым строкам книги (номера — как на экране). Коротко: фраза
+    звучит после каждой неоднозначности, длинная утомляет."""
     count = _COUNT_WORDS.get(len(candidates), str(len(candidates)))
     if len(candidates) > _MAX_LISTED_CANDIDATES:
-        return f"{who}: найдено {count}, список на экране"
+        return f"{who}: {count}, список на экране"
     listed = ", ".join(
         f"{_ordinal_word(c.get('number', i + 1))} {_given_names(c, query_words)}" for i, c in enumerate(candidates)
     )
-    return f"{who}: найдено {count} — {listed}"
+    return f"{who}: {count} — {listed}"
+
+
+def _open_next_picker() -> str | None:
+    """Открыть книгу для следующей неоднозначности из очереди; вернуть, что
+    сказать, либо None, если очередь пуста."""
+    while _picker_queue:
+        window, contacts = _picker_queue.pop(0)
+        described = _open_picker_for(window, contacts)
+        if described is not None:
+            return described
+    return None
 
 
 def _ordinal_word(number: int) -> str:
@@ -565,52 +594,77 @@ def _open_picker_for(window: list[str], contacts: list[dict]) -> str | None:
     visible = [c for c in state.get("candidates", []) if isinstance(c, dict)]
     if not visible:
         visible = [dict(c, number=i + 1) for i, c in enumerate(contacts)]
-    return _describe_candidates(query.capitalize(), visible, window) + ". Назовите номер или имя, затем скажите принять"
+    return _describe_candidates(query.capitalize(), visible, window) + ". Номер или имя, затем принять"
 
 
-def handle_picker_phrase(tokens: list[str]) -> FormReply:
-    """Фраза, пока адресная книга открыта."""
+def _picker_select_tokens(tokens: list[str]) -> str | None:
+    """Отметить/снять строки по словам фразы («второй», «первый и третий»,
+    «евгений», «все», «убери второго»). Возвращает, что сказать при
+    неудаче, либо None, если всё отмечено (тогда — только сигнал)."""
+    if not tokens:
+        return None
+    uncheck = tokens[0] in _PICKER_UNCHECK
+    rest = tokens[1:] if uncheck else tokens
+    if any(t in _PICKER_ALL for t in rest):
+        _redmail_picker_select(all_visible=True, checked=not uncheck)
+        return None
+    numbers = _picker_numbers([t for t in rest if t not in ("и", "номер", "номера")])
+    if numbers:
+        touched = 0
+        for number in numbers:
+            touched += int(_redmail_picker_select(number=number, checked=not uncheck).get("touched", 0))
+        return None if touched else "Такого номера в списке нет"
+    query_words = [t for t in rest if t not in _PARTICIPANT_FILLERS]
+    if not query_words:
+        return None
+    state = _redmail_picker_select(query=" ".join(query_words), checked=not uncheck)
+    if int(state.get("touched", 0)) == 0:
+        return f"{' '.join(query_words).capitalize()}: в списке нет"
+    return None
+
+
+def _picker_finish(spoken: str) -> FormReply:
+    """После «принять»/«отмена»: закрыть эту книгу и, если в очереди есть
+    следующая неоднозначная фамилия, сразу открыть книгу для неё."""
+    global _picker_open
+    _picker_open = False
+    _pending_candidates.clear()
+    following = _open_next_picker()
+    if following:
+        spoken = f"{spoken}. Далее {following}"
+    return FormReply(handled=True, spoken=spoken)
+
+
+def handle_picker_phrase(tokens: list[str]) -> FormReply | None:
+    """Фраза, пока адресная книга открыта. None — книги на экране уже нет
+    (закрыли мышью): вызывающий разбирает фразу как обычную."""
     global _picker_open
     if not tokens:
         return FormReply(handled=False)
-    first = tokens[0]
     try:
-        if first in _PICKER_ACCEPT:
-            selected = _redmail_picker_accept()
-            _picker_open = False
-            _pending_candidates.clear()
-            names = ", ".join(str(c.get("name") or c.get("email", "")) for c in selected)
-            return FormReply(handled=True, spoken=f"Участники: {names}" if names else "Никто не выбран")
-        if first in _PICKER_CANCEL:
+        # «два принять» одной фразой: сначала отметить, потом принять.
+        accept = tokens[-1] in _PICKER_ACCEPT
+        selection = tokens[:-1] if accept else tokens
+        if not accept and tokens[0] in _PICKER_CANCEL:
             _redmail_picker_cancel()
-            _picker_open = False
-            return FormReply(handled=True, spoken="Книга закрыта")
-        uncheck = first in _PICKER_UNCHECK
-        rest = tokens[1:] if uncheck else tokens
-        if any(t in _PICKER_ALL for t in rest):
-            _redmail_picker_select(all_visible=True, checked=not uncheck)
+            return _picker_finish("Книга закрыта")
+        problem = _picker_select_tokens(selection) if selection else None
+        if problem and not accept:
+            return FormReply(handled=True, spoken=problem)
+        if not accept:
             return FormReply(handled=True)
-        numbers = _picker_numbers([t for t in rest if t not in ("и", "номер", "номера")])
-        if numbers:
-            touched = 0
-            for number in numbers:
-                touched += int(_redmail_picker_select(number=number, checked=not uncheck).get("touched", 0))
-            if touched:
-                return FormReply(handled=True)
-            return FormReply(handled=True, spoken="Такого номера в списке нет")
-        query_words = [t for t in rest if t not in _PARTICIPANT_FILLERS]
-        if not query_words:
-            return FormReply(handled=True)
-        state = _redmail_picker_select(query=" ".join(query_words), checked=not uncheck)
-        if int(state.get("touched", 0)) == 0:
-            return FormReply(handled=True, spoken=f"{' '.join(query_words).capitalize()}: в списке нет")
-        return FormReply(handled=True)
+        selected = _redmail_picker_accept()
+        names = ", ".join(str(c.get("name") or c.get("email", "")) for c in selected)
+        return _picker_finish(f"Участники: {names}" if names else "Никто не выбран")
     except RedmailError as exc:
         log.info("Адресная книга: %s", exc)
         _picker_open = False
         if _form_closed(exc):
             return FormReply(handled=True, finished=True)
-        return FormReply(handled=True, spoken="Книга закрыта")
+        if _picker_closed(exc):
+            _picker_queue.clear()
+            return None  # книгу закрыли мышью — фраза относится к форме
+        return FormReply(handled=True, spoken="Не удалось выполнить команду")
 
 
 def _open_picker_command(tokens: list[str]) -> FormReply | None:
@@ -628,7 +682,7 @@ def _open_picker_command(tokens: list[str]) -> FormReply | None:
                 return FormReply(handled=True, spoken="Не удалось открыть адресную книгу")
             _picker_open = True
             count = len(state.get("candidates", []))
-            return FormReply(handled=True, spoken=f"Адресная книга открыта, в списке {count}. Назовите номер или имя, затем скажите принять")
+            return FormReply(handled=True, spoken=f"Адресная книга открыта, в списке {count}. Номер или имя, затем принять")
     return None
 
 

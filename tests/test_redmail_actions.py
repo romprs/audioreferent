@@ -339,8 +339,7 @@ def test_ambiguous_surname_opens_picker_and_describes_numbered_candidates():
     mock_set.assert_not_called()
     mock_open.assert_called_once_with("шилкин")
     assert reply.spoken == (
-        "Шилкин: найдено двое — первый Александр, второй Евгений Александрович. "
-        "Назовите номер или имя, затем скажите принять"
+        "Шилкин: двое — первый Александр, второй Евгений Александрович. Номер или имя, затем принять"
     )
     assert redmail_actions.picker_is_open()
     # книга открыта -> любая фраза считается фразой формы даже без активационного слова
@@ -366,6 +365,66 @@ def test_ambiguous_surname_opens_picker_and_describes_numbered_candidates():
     with patch(FORM + "_redmail_picker_accept", return_value=[{"name": "Шилкин Евгений Александрович", "email": "e@x"}]):
         reply = _form_phrase("принять")
     assert reply.spoken == "Участники: Шилкин Евгений Александрович" and not reply.finished
+    assert not redmail_actions.picker_is_open()
+
+
+def test_number_and_accept_in_one_phrase():
+    redmail_actions._picker_open = True
+    redmail_actions._picker_queue.clear()
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select, patch(
+        FORM + "_redmail_picker_accept", return_value=[{"name": "Шилкин Евгений Александрович", "email": "e@x"}]
+    ) as mock_accept:
+        reply = _form_phrase("два принять")
+    mock_select.assert_called_once_with(number=2, checked=True)
+    mock_accept.assert_called_once()
+    assert reply.spoken == "Участники: Шилкин Евгений Александрович"
+    assert not redmail_actions.picker_is_open()
+
+
+def test_second_ambiguous_surname_is_queued_and_opened_after_accept():
+    redmail_actions._picker_open = False
+    redmail_actions._picker_queue.clear()
+    shilkins = [c for c in BOOK if c["name"].startswith("Шилкин")]
+    book2 = BOOK + [{"name": "Шапошников Андрей", "email": "sh.a@x"}, {"name": "Шапошникова Алевтина", "email": "sh.b@x"}]
+    find = lambda q: redmail_actions._local_matches(q.split(), book2)  # noqa: E731
+    opens: list[str] = []
+
+    def fake_open(query):
+        opens.append(query)
+        cands = find(query)
+        return _picker_state(query, cands)
+
+    with patch(FORM + "_redmail_find_contacts", side_effect=find), patch(FORM + "_redmail_event_form_set") as mock_set, patch(
+        FORM + "_redmail_picker_open", side_effect=fake_open
+    ):
+        reply = _form_phrase("участники будько шилкин шапошников")
+        mock_set.assert_called_once_with(add_participants=["budko@example.com"])
+        assert opens == ["шилкин"]  # книга открыта для первой фамилии
+        assert reply.spoken == (
+            "Добавлен Будько Евгений. Шилкин: двое — первый Александр, второй Евгений Александрович. "
+            "Номер или имя, затем принять. Шапошников: двое — спрошу следом"
+        )
+        with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}), patch(
+            FORM + "_redmail_picker_accept", return_value=[shilkins[1]]
+        ):
+            reply = _form_phrase("второй принять")
+        assert opens == ["шилкин", "шапошников"]  # после «принять» открылась книга для следующей фамилии
+        assert reply.spoken == (
+            "Участники: Шилкин Евгений Александрович. Далее Шапошников: двое — первый Андрей, второй Алевтина. "
+            "Номер или имя, затем принять"
+        )
+        assert redmail_actions.picker_is_open()
+    redmail_actions._picker_open = False
+
+
+def test_book_closed_by_mouse_lets_the_phrase_through_as_a_field():
+    redmail_actions._picker_open = True
+    with patch(FORM + "_redmail_picker_select", side_effect=RedmailError("Адресная книга не открыта.")), patch(
+        FORM + "_redmail_event_form_set"
+    ) as mock_set:
+        reply = _form_phrase("тема планёрка")
+    mock_set.assert_called_once_with(subject="планёрка")  # фраза ушла в форму, режим не окончен
+    assert reply.handled and not reply.finished
     assert not redmail_actions.picker_is_open()
 
 
