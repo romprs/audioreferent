@@ -726,3 +726,13 @@ def test_after_timeout_only_next_or_back_resume_dialog_from_idle():
     _open_dialog("")
     assert redmail_actions.looks_like_form_phrase("дальше", wake_word="вика", fuzzy_threshold=1)
     assert not redmail_actions.looks_like_form_phrase("пойдём обедать", wake_word="вика", fuzzy_threshold=1)
+
+
+def test_yes_inside_long_phrase_does_not_save():
+    """Сохранение встречи Exchange рассылает приглашения — «да» из разговора не в счёт."""
+    _open_dialog("", calendars=[])
+    for _ in range(6):
+        _dialog_phrase("дальше")
+    with patch(FORM + "_redmail_event_form_save") as mock_save, patch(FORM + "_redmail_event_form_set"):
+        reply, _focus = _dialog_phrase("да я тебе потом перезвоню насчёт отчёта")
+    assert not mock_save.called and not reply.finished

@@ -403,7 +403,11 @@ def handle_form_phrase(
             _dialog.index = max(_dialog.index - 1, 0)
             return FormReply(handled=True, spoken=_dialog_question(), question=True)
         final_step = _dialog is not None and _dialog.field is None
-        if first in form_words.save or (final_step and first in _DIALOG_YES):
+        # «Да» сохраняет, только если это вся фраза: сохранение встречи
+        # Exchange рассылает приглашения, а «да» из разговора рядом с
+        # микрофоном («да, я понял, что…») не должно их отправить.
+        short_answer = len(tokens) <= 2
+        if first in form_words.save or (final_step and short_answer and first in _DIALOG_YES):
             _redmail_event_form_save()
             _stop_dialog()
             return FormReply(handled=True, spoken="Встреча сохранена", finished=True)
@@ -411,7 +415,7 @@ def handle_form_phrase(
             _redmail_event_form_cancel()
             _stop_dialog()
             return FormReply(handled=True, spoken="Отменено", finished=True)
-        if final_step and first in _DIALOG_NO:
+        if final_step and short_answer and first in _DIALOG_NO:
             _stop_dialog()
             return FormReply(handled=True, spoken="Хорошо. Поправьте поля или скажите сохранить")
 
