@@ -145,7 +145,8 @@ class Assistant:
             log.info("Выполнено действие %s (команда: %r)", match.spec.action, text)
             if getattr(result, "enter_form_mode", False):
                 log.info("Открыта форма встречи — режим заполнения (без активационного слова)")
-                self._speak("Слушаю", fallback=None)
+                # В разговорном режиме вместо «Слушаю» — первый вопрос.
+                self._speak(getattr(result, "question", None) or "Слушаю", fallback=None)
                 self._beep(drop_echo=True)
                 return True
             self._beep(drop_echo=True)
@@ -173,7 +174,10 @@ class Assistant:
             return True
         log.info("Поле формы: %r%s", text, f" -> {reply.spoken}" if reply.spoken else "")
         if reply.spoken:
-            self._speak(reply.spoken, fallback=reply.spoken_fallback or "Не удалось выполнить команду")
+            # Вопрос без записи и без синтеза лучше промолчать, чем сказать
+            # «Не удалось выполнить команду»: поле и так подсвечено в окне.
+            fallback = None if reply.question else (reply.spoken_fallback or "Не удалось выполнить команду")
+            self._speak(reply.spoken, fallback=fallback)
         else:
             self._beep(drop_echo=True)
         if reply.finished:

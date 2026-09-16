@@ -48,6 +48,7 @@ EVENT_FORM_FIELDS: list[tuple[str, str]] = [
     ("duration", "Продолжительность"),
     ("recurrence", "Повторение"),
     ("participants", "Участники"),
+    ("calendar", "Календарь"),
     ("location", "Место"),
     ("description", "Описание"),
 ]
@@ -63,15 +64,26 @@ class EventFormWords:
     fields: dict[str, list[str]] = field(default_factory=dict)
     save: list[str] = field(default_factory=list)
     cancel: list[str] = field(default_factory=list)
+    # Разговорный режим: помощник задаёт вопросы по полям по очереди,
+    # «дальше» — к следующему вопросу, «назад» — к предыдущему.
+    next: list[str] = field(default_factory=list)
+    back: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "EventFormWords":
         data = data or {}
         fields = {key: list(words or []) for key, words in (data.get("fields") or {}).items()}
-        return cls(fields=fields, save=list(data.get("save") or []), cancel=list(data.get("cancel") or []))
+        return cls(
+            fields=fields, save=list(data.get("save") or []), cancel=list(data.get("cancel") or []),
+            next=list(data.get("next") or []), back=list(data.get("back") or []),
+        )
 
     def to_dict(self) -> dict:
-        return {"fields": {k: list(v) for k, v in self.fields.items()}, "save": list(self.save), "cancel": list(self.cancel)}
+        return {
+            "fields": {k: list(v) for k, v in self.fields.items()},
+            "save": list(self.save), "cancel": list(self.cancel),
+            "next": list(self.next), "back": list(self.back),
+        }
 
 
 @dataclass

@@ -577,3 +577,152 @@ def test_every_spoken_phrase_has_a_recording_entry():
     } | {phrase for _marker, phrase in _REDMAIL_ERROR_PHRASES}
     missing = spoken - set(feedback._PRERECORDED_PHRASES)
     assert not missing, missing
+
+
+# ---------------------------------------------------------------------------
+# Разговорный режим и выбор календаря
+# ---------------------------------------------------------------------------
+
+CALENDARS = [
+    {"number": 1, "id": "default", "name": "Мои встречи", "source": "local", "current": True},
+    {"number": 2, "id": "vk", "name": "CalDAV", "source": "caldav", "current": False},
+    {"number": 3, "id": "ex", "name": "Exchange: me@example.com", "source": "ews", "current": False},
+]
+
+
+@pytest.fixture(autouse=True)
+def _no_dialog_between_tests():
+    redmail_actions._stop_dialog()
+    yield
+    redmail_actions._stop_dialog()
+
+
+def _open_dialog(remainder="", calendars=CALENDARS):
+    with patch(FORM + "_redmail_event_form_open"), patch(FORM + "_redmail_list_calendars", return_value=calendars), \
+            patch(FORM + "_redmail_event_form_focus") as focus, patch(FORM + "date_cls") as mock_date:
+        mock_date.today.return_value = TODAY
+        session = redmail_actions.redmail_event_form({"remainder": remainder})
+    return session, focus
+
+
+def _dialog_phrase(text):
+    with patch(FORM + "_redmail_event_form_focus") as focus:
+        reply = _form_phrase(text)
+    return reply, focus
+
+
+def test_dialog_asks_first_unnamed_field_and_highlights_it():
+    session, focus = _open_dialog("")
+    assert session.question == "Какая тема встречи?"
+    focus.assert_called_once_with("subject")
+
+
+def test_dialog_skips_fields_named_in_command():
+    session, focus = _open_dialog("планёрка на 15 сентября в восемь тридцать")
+    assert session.question == "Сколько длится встреча?"
+    focus.assert_called_once_with("duration")
+
+
+def test_answer_without_field_word_goes_to_current_question_and_stays_there():
+    """Ответ можно повторить, чтобы исправить; к следующему — по «дальше»."""
+    _open_dialog("")
+    with patch(FORM + "_redmail_event_form_set") as mock_set:
+        reply, _focus = _dialog_phrase("планёрка отдела")
+    assert reply.handled and not reply.finished
+    mock_set.assert_called_once_with(subject="планёрка отдела")
+    assert redmail_actions._dialog.field == "subject"
+
+
+def test_next_and_back_move_between_questions():
+    _open_dialog("")
+    reply, focus = _dialog_phrase("дальше")
+    assert reply.question and reply.spoken == "На какой день?"
+    focus.assert_called_once_with("date")
+    reply, _focus = _dialog_phrase("дальше")
+    assert reply.spoken == "Во сколько начало?"
+    reply, focus = _dialog_phrase("назад")
+    assert reply.spoken == "На какой день?"
+    focus.assert_called_once_with("date")
+
+
+def test_date_answer_is_parsed_like_field_phrase():
+    _open_dialog("")
+    _dialog_phrase("дальше")
+    with patch(FORM + "_redmail_event_form_set") as mock_set:
+        _dialog_phrase("15 сентября")
+    assert mock_set.call_args[1]["date"].endswith("-09-15")
+
+
+def test_calendar_question_lists_calendars_and_answer_selects_one():
+    _open_dialog("планёрка на 15 сентября в восемь тридцать")
+    reply, focus = _dialog_phrase("дальше")
+    assert reply.spoken == "В какой календарь? 1 — Мои встречи, 2 — CalDAV, 3 — Exchange: me@example.com"
+    focus.assert_called_once_with("calendar")
+    with patch(FORM + "_redmail_event_form_set", return_value={"calendar": "Exchange: me@example.com"}) as mock_set:
+        reply, _focus = _dialog_phrase("эксчейндж")
+    mock_set.assert_called_once_with(calendar="эксчейндж")
+    assert reply.spoken == "Календарь Exchange: me@example.com"
+
+
+def test_calendar_question_is_skipped_when_only_one_calendar():
+    _open_dialog("планёрка на 15 сентября в восемь тридцать", calendars=CALENDARS[:1])
+    reply, _focus = _dialog_phrase("дальше")
+    assert reply.spoken.startswith("Кого пригласить?")
+
+
+def test_calendar_field_word_works_outside_dialog():
+    with patch(FORM + "_redmail_event_form_set", return_value={"calendar": "CalDAV"}) as mock_set:
+        reply = _form_phrase("календарь вк")
+    mock_set.assert_called_once_with(calendar="вк")
+    assert reply.spoken == "Календарь CalDAV"
+
+
+def test_unknown_calendar_speaks_what_exists():
+    message = "Календарь «гугл» не найден. Есть: 1 — Мои встречи, 2 — CalDAV"
+    with patch(FORM + "_redmail_event_form_set", side_effect=RedmailError(message)):
+        reply = _form_phrase("календарь гугл")
+    assert reply.handled and reply.spoken == message
+
+
+def test_final_question_yes_saves_and_no_leaves_form_open():
+    _open_dialog("", calendars=[])
+    for _ in range(6):  # тема, день, время, длительность, участники, место
+        reply, _focus = _dialog_phrase("дальше")
+    assert reply.spoken == "Всё заполнено. Сохранить встречу?"
+    with patch(FORM + "_redmail_event_form_save") as mock_save:
+        reply, _focus = _dialog_phrase("да")
+    mock_save.assert_called_once_with()
+    assert reply.finished and not redmail_actions.dialog_is_active()
+
+
+def test_final_question_no_ends_dialog_but_keeps_form():
+    _open_dialog("", calendars=[])
+    for _ in range(6):
+        _dialog_phrase("дальше")
+    with patch(FORM + "_redmail_event_form_save") as mock_save:
+        reply, _focus = _dialog_phrase("нет")
+    assert not mock_save.called and not reply.finished
+    assert not redmail_actions.dialog_is_active()
+
+
+def test_field_words_still_work_during_dialog_without_moving_question():
+    _open_dialog("")
+    with patch(FORM + "_redmail_event_form_set") as mock_set:
+        _dialog_phrase("место кабинет сто")
+    mock_set.assert_called_once_with(location="кабинет сто")
+    assert redmail_actions._dialog.field == "subject"
+
+
+def test_edit_command_does_not_start_dialog():
+    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-7")]), patch(
+        FORM + "_redmail_event_form_open"
+    ), patch(FORM + "date_cls") as mock_date:
+        mock_date.today.return_value = TODAY
+        session = redmail_actions.redmail_event_form({"remainder": "планёрка", "edit": True})
+    assert session.question is None and not redmail_actions.dialog_is_active()
+
+
+def test_after_timeout_only_next_or_back_resume_dialog_from_idle():
+    _open_dialog("")
+    assert redmail_actions.looks_like_form_phrase("дальше", wake_word="вика", fuzzy_threshold=1)
+    assert not redmail_actions.looks_like_form_phrase("пойдём обедать", wake_word="вика", fuzzy_threshold=1)

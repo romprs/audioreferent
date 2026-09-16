@@ -301,13 +301,17 @@ class SettingsWindow(QMainWindow):
         hint = QLabel(
             "Первое слово фразы — поле, остальное — значение: «тема планёрка», «дата следующий "
             "понедельник», «время восемь тридцать», «продолжительность два часа», «повторение каждую "
-            "неделю», «участники шилкин пономарёв» (по фамилии из адресной книги), «место …», «описание …». "
-            "Отдельно: «сохранить» / «отменить»."
+            "неделю», «участники шилкин пономарёв» (по фамилии из адресной книги), «календарь эксчейндж», "
+            "«место …», «описание …». Отдельно: «сохранить» / «отменить». После «создай встречу» помощник "
+            "сам спрашивает поля по очереди: отвечайте значением, «дальше» — следующий вопрос, «назад» — предыдущий."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        rows = config.EVENT_FORM_FIELDS + [("save", "Сохранить (нажать кнопку)"), ("cancel", "Отменить (нажать кнопку)")]
+        rows = config.EVENT_FORM_FIELDS + [
+            ("save", "Сохранить (нажать кнопку)"), ("cancel", "Отменить (нажать кнопку)"),
+            ("next", "Дальше (следующий вопрос)"), ("back", "Назад (предыдущий вопрос)"),
+        ]
         self.event_form_table = QTableWidget(len(rows), 2)
         self.event_form_table.setHorizontalHeaderLabels(["Поле", "Слова (через ;)"])
         self.event_form_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -326,10 +330,8 @@ class SettingsWindow(QMainWindow):
 
     def _load_event_form_words(self, words: config.EventFormWords) -> None:
         for row, key in enumerate(self._event_form_keys):
-            if key == "save":
-                values = words.save
-            elif key == "cancel":
-                values = words.cancel
+            if key in ("save", "cancel", "next", "back"):
+                values = getattr(words, key)
             else:
                 values = words.fields.get(key, [])
             self.event_form_table.item(row, 1).setText("; ".join(values))
@@ -339,10 +341,8 @@ class SettingsWindow(QMainWindow):
         for row, key in enumerate(self._event_form_keys):
             item = self.event_form_table.item(row, 1)
             values = [w.strip().lower() for w in (item.text() if item else "").split(";") if w.strip()]
-            if key == "save":
-                result.save = values
-            elif key == "cancel":
-                result.cancel = values
+            if key in ("save", "cancel", "next", "back"):
+                setattr(result, key, values)
             else:
                 result.fields[key] = values
         return result

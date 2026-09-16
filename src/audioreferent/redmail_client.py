@@ -163,6 +163,17 @@ def event_form_cancel() -> None:
     send_request("event_form_cancel")
 
 
+def event_form_focus(field: str) -> dict:
+    """Подсветить в окне поле, о котором помощник сейчас спрашивает."""
+    return send_request("event_form_focus", {"field": field}).get("form", {})
+
+
+def list_calendars() -> list[dict]:
+    """Календари redmail по порядку: [{number, id, name, source, current}]."""
+    calendars = send_request("list_calendars").get("calendars", [])
+    return [c for c in calendars if isinstance(c, dict)]
+
+
 # --- адресная книга поверх открытой формы (contact_picker_* в redmail) ---
 
 
