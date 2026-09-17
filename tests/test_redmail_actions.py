@@ -103,7 +103,7 @@ def test_reschedule_is_the_edit_dialog_with_new_time_applied():
     mock_find.assert_called_once_with(subject=None, date="2026-09-08")
     mock_open.assert_called_once_with(uid="uid-1")
     mock_set.assert_called_once_with(date="2026-09-10", time="15:30")
-    assert session.question == "Перенесла на 10 сентября в 15:30. Сохранить изменения?"
+    assert session.question == "Перенесла на 10 сентября в 15:30. Что ещё поменять? Или скажите сохранить"
 
 
 def test_reschedule_by_minutes_shifts_from_current_start():
@@ -112,7 +112,7 @@ def test_reschedule_by_minutes_shifts_from_current_start():
     local = __import__("datetime").datetime.fromisoformat(start).astimezone()
     moved = local + __import__("datetime").timedelta(minutes=30)
     mock_set.assert_called_once_with(date=moved.date().isoformat(), time=f"{moved.hour:02d}:{moved.minute:02d}")
-    assert session.question.endswith("Сохранить изменения?")
+    assert session.question.endswith("Что ещё поменять? Или скажите сохранить")
     _session, _find, _open, mock_set = _reschedule("планерку на час раньше", [_event(uid="p", summary="Планёрка", start=start)])
     earlier = local - __import__("datetime").timedelta(hours=1)
     assert mock_set.call_args[1]["time"] == f"{earlier.hour:02d}:{earlier.minute:02d}"
@@ -130,7 +130,9 @@ def test_reschedule_opens_form_sets_time_and_asks_to_save():
         reply = _form_phrase("второй")
     mock_open.assert_called_once_with(uid="b")
     mock_set.assert_called_once_with(date="2026-09-09", time="10:00")
-    assert reply.spoken == "Перенесла на 9 сентября в 10:00. Сохранить изменения?"
+    assert reply.spoken == "Перенесла на 9 сентября в 10:00. Что ещё поменять? Или скажите сохранить"
+    reply = _form_phrase("всё")
+    assert reply.spoken == "Сохранить изменения?"
     with patch(FORM + "_redmail_event_form_save") as mock_save:
         reply = _form_phrase("да")
     mock_save.assert_called_once_with()
@@ -140,14 +142,23 @@ def test_reschedule_opens_form_sets_time_and_asks_to_save():
 def test_reschedule_date_only_keeps_the_time():
     session, _find, _open, mock_set = _reschedule("планёрка на пятнадцатого сентября", [_event(uid="uid-1", summary="Планёрка")])
     mock_set.assert_called_once_with(date="2026-09-15")  # время в окне остаётся прежним
-    assert session.question == "Перенесла на 15 сентября. Сохранить изменения?"
+    assert session.question == "Перенесла на 15 сентября. Что ещё поменять? Или скажите сохранить"
 
 
-def test_reschedule_without_new_time_asks_fields_like_edit():
+def test_reschedule_without_new_time_asks_day_time_duration_then_what_else():
     session, *_rest = _reschedule("", [])
-    assert session.question == "Какую встречу изменить? Назовите тему или день"
-    session, *_rest = _reschedule("на завтра", [])
     assert session.question == "Какую встречу перенести? Назовите тему или день"
+    session, _find, mock_open, _set = _reschedule("планёрку", [_event(uid="p", summary="Планёрка")])
+    mock_open.assert_called_once_with(uid="p")
+    assert session.question == "Открыла встречу. На какой день? Если не меняется, скажите дальше"
+    with patch(FORM + "_redmail_event_form_set") as mock_set:
+        reply, _focus = _dialog_phrase("в пятницу")
+        assert reply.spoken == "Во сколько начало?"
+        reply, _focus = _dialog_phrase("дальше")
+        assert reply.spoken == "Сколько длится встреча?"
+        reply, _focus = _dialog_phrase("полтора часа")
+    assert mock_set.call_args_list[-1][1] == {"duration_minutes": 90}
+    assert reply.spoken == "Что ещё поменять? Или скажите сохранить" and redmail_actions._dialog.menu
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +264,8 @@ def test_event_form_edit_finds_own_event_by_subject():
         session = redmail_actions.redmail_event_form({"remainder": "планёрка", "edit": True})
     mock_find.assert_called_once_with(subject=None, date="2026-09-08")
     mock_open.assert_called_once_with(uid="uid-7")
-    assert session.question == "Открыла встречу. Скажите дальше, чтобы оставить поле как есть. Какая тема встречи?"
-    assert redmail_actions.dialog_is_active() and redmail_actions._dialog.edit
+    assert session.question == "Открыла встречу. Что поменять? Например: время начала, дату, продолжительность, участников, тему или место"
+    assert redmail_actions.dialog_is_active() and redmail_actions._dialog.menu
 
 
 def _form_phrase(text):
@@ -822,11 +833,60 @@ def test_edit_recurring_event_opens_the_day_and_asks_fields():
             patch(FORM + "_redmail_event_form_focus"):
         reply = _form_phrase("всю серию")
     mock_open.assert_called_once_with(uid="daily", occurrence_start="2026-09-10T00:30:00+00:00", scope="all")
-    assert reply.spoken.endswith("Какая тема встречи?")
-    reply, _focus = _dialog_phrase("дальше")
-    assert reply.spoken == "На какой день?"
-    redmail_actions._dialog.index = len(redmail_actions._dialog.steps)
-    assert redmail_actions._dialog_question() == "Сохранить изменения?"
+    assert reply.spoken.startswith("Открыла встречу. Что поменять?")
+
+
+def _menu():
+    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="p", summary="Планёрка")]), \
+            patch(FORM + "date_cls") as mock_date, patch(FORM + "_redmail_event_form_open"):
+        mock_date.today.return_value = TODAY
+        redmail_actions.redmail_event_form({"remainder": "планёрку", "edit": True})
+    assert redmail_actions._dialog.menu
+
+
+@pytest.mark.parametrize(
+    "phrase, expected",
+    [
+        ("измени время начала на десять", {"time": "10:00"}),
+        ("поменяй продолжительность на час", {"duration_minutes": 60}),
+        ("дату на завтра", {"date": (date.today() + __import__("datetime").timedelta(days=1)).isoformat()}),
+        ("смени тему на итоги недели", {"subject": "итоги недели"}),
+        ("место переговорная два", {"location": "переговорная два"}),
+        ("повтор каждую неделю", {"recurrence": "weekly"}),
+    ],
+)
+def test_edit_menu_changes_field_and_asks_what_else(phrase, expected):
+    _menu()
+    with patch(FORM + "_redmail_event_form_set") as mock_set, patch(FORM + "_redmail_event_form_focus"):
+        reply = _form_phrase(phrase)
+    assert mock_set.call_args[1] == expected
+    assert reply.spoken == "Что ещё поменять? Или скажите сохранить" and reply.delay == redmail_actions.ADVANCE_DELAY_SECONDS
+
+
+def test_edit_menu_participants_add_remove_unknown_done_and_cancel():
+    _menu()
+    with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(FORM + "_redmail_event_form_set") as mock_set:
+        reply = _form_phrase("добавь будько")
+    mock_set.assert_called_once_with(add_participants=["budko@example.com"])
+    assert reply.spoken == "Что ещё поменять? Или скажите сохранить"
+    reply, mock_set = _remove("удали будько")
+    assert reply.spoken == "Убрала: Будько Олег. Что ещё поменять? Или скажите сохранить"
+    assert _form_phrase("пойдём обедать").spoken == "Не поняла. Что ещё поменять? Или скажите сохранить"
+    assert _form_phrase("ничего").spoken == "Сохранить изменения?"
+    assert _form_phrase("нет").spoken == "Что ещё поменять? Или скажите сохранить"
+    with patch(FORM + "_redmail_event_form_cancel") as mock_cancel:
+        reply = _form_phrase("отмена")
+    mock_cancel.assert_called_once_with()
+    assert reply.finished and not redmail_actions.dialog_is_active()
+
+
+def test_wake_word_cancel_goes_to_open_form_not_to_cancel_meeting_command():
+    _menu()
+    assert redmail_actions.wants_form_phrase("вика отмена", wake_word="вика", fuzzy_threshold=1)
+    assert redmail_actions.wants_form_phrase("вика измени время на десять", wake_word="вика", fuzzy_threshold=1)
+    assert not redmail_actions.wants_form_phrase("вика открой календарь", wake_word="вика", fuzzy_threshold=1)
+    redmail_actions._stop_dialog()
+    assert not redmail_actions.wants_form_phrase("вика отмена", wake_word="вика", fuzzy_threshold=1)
 
 
 def test_after_timeout_only_next_or_back_resume_dialog_from_idle():

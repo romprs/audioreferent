@@ -258,6 +258,19 @@ class Assistant:
                     # активационное слово было сказано отдельно, и команду
                     # нужно ждать следующим высказыванием.
                     self.recognizer.reset()
+                    if redmail_actions.wants_form_phrase(
+                        final,
+                        wake_word=self.config.wake_word,
+                        fuzzy_threshold=self.config.wake_word_fuzzy_threshold,
+                        words=self.config.event_form,
+                    ):
+                        # Разговор о встрече ещё идёт, а режим погас по тишине:
+                        # «вика отмена», «вика время на десять» — окну встречи.
+                        log.info("Фраза для открытой встречи (со словом активации): %r", final)
+                        if self._on_form_phrase(final):
+                            state = "form"
+                            deadline = time.monotonic() + self.config.form_timeout_seconds
+                        continue
                     if self.registry.match(final) is not None:
                         if self._on_command(final):
                             state = "form"

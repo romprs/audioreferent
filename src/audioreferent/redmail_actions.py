@@ -182,7 +182,8 @@ def redmail_reschedule_event(args: dict[str, Any]) -> FormSession:
         if new_date is not None or new_time is not None or shift:
             text = " ".join(head_words)
     return _begin_event_dialog(
-        "edit", {**args, "remainder": text}, new_date=new_date, new_time=new_time, shift_minutes=shift
+        "edit", {**args, "remainder": text}, new_date=new_date, new_time=new_time, shift_minutes=shift,
+        reschedule=True,
     )
 
 
@@ -244,6 +245,7 @@ class _EventDialog:
     new_date: date_cls | None = None
     new_time: tuple[int, int] | None = None
     shift_minutes: int | None = None  # «перенеси на 30 минут» / «на час раньше»
+    reschedule: bool = False  # перенос: спрашиваем только день, время и длительность
 
 
 _event_dialog: _EventDialog | None = None
@@ -286,14 +288,16 @@ def _search_events(text: str) -> list[dict] | None:
 
 def _begin_event_dialog(
     action: str, args: dict[str, Any], *, new_date: date_cls | None = None, new_time: tuple[int, int] | None = None,
-    shift_minutes: int | None = None,
+    shift_minutes: int | None = None, reschedule: bool = False,
 ) -> FormSession:
     global _event_dialog
     _stop_dialog()
-    _event_dialog = _EventDialog(action=action, new_date=new_date, new_time=new_time, shift_minutes=shift_minutes)
+    _event_dialog = _EventDialog(
+        action=action, new_date=new_date, new_time=new_time, shift_minutes=shift_minutes, reschedule=reschedule,
+    )
     text = str(args.get("remainder", "")).strip()
     if not text:
-        if new_date is not None or new_time is not None or shift_minutes:
+        if reschedule:
             return FormSession(question="Какую встречу перенести? Назовите тему или день")
         return FormSession(question=_WHICH_QUESTION[action])
     try:
@@ -358,14 +362,13 @@ def _event_next_after_choice() -> FormReply:
         fields["scope"] = dialog.scope or "one"
     _redmail_event_form_open(**fields)
     _event_dialog = None
-    question = _start_dialog(set(), edit=True)
     if dialog.shift_minutes:
         moved = datetime.fromisoformat(event["start"]).astimezone() + timedelta(minutes=dialog.shift_minutes)
         _redmail_event_form_set(date=moved.date().isoformat(), time=f"{moved.hour:02d}:{moved.minute:02d}")
-        _dialog.index = len(_dialog.steps)  # всё названо сразу — только подтверждение
+        _start_menu()
         return FormReply(
             handled=True,
-            spoken=f"Перенесла на {moved.day} {_MONTHS_GENITIVE[moved.month]} в {moved:%H:%M}. {_dialog_question()}",
+            spoken=f"Перенесла на {moved.day} {_MONTHS_GENITIVE[moved.month]} в {moved:%H:%M}. {_MENU_NEXT}",
             question=True,
         )
     if dialog.new_date is not None or dialog.new_time is not None:
@@ -378,12 +381,16 @@ def _event_next_after_choice() -> FormReply:
             changes["time"] = f"{dialog.new_time[0]:02d}:{dialog.new_time[1]:02d}"
             when.append(f"в {changes['time']}")
         _redmail_event_form_set(**changes)
-        _dialog.index = len(_dialog.steps)  # всё названо сразу — только подтверждение
-        return FormReply(handled=True, spoken=f"Перенесла на {' '.join(when)}. {_dialog_question()}", question=True)
-    return FormReply(
-        handled=True, spoken=f"Открыла встречу. Скажите дальше, чтобы оставить поле как есть. {question}",
-        question=True,
-    )
+        _start_menu()
+        return FormReply(handled=True, spoken=f"Перенесла на {' '.join(when)}. {_MENU_NEXT}", question=True)
+    if dialog.reschedule:
+        # Перенос — это день, время и длительность, а не все поля встречи.
+        question = _start_menu(_RESCHEDULE_STEPS)
+        return FormReply(
+            handled=True, spoken=f"Открыла встречу. {question} Если не меняется, скажите дальше", question=True,
+        )
+    _start_menu()
+    return FormReply(handled=True, spoken=f"Открыла встречу. {_MENU_FIRST}", question=True)
 
 
 def handle_event_dialog_phrase(tokens: list[str]) -> FormReply:
@@ -501,6 +508,20 @@ _DIALOG_FINAL_EDIT = "Сохранить изменения?"
 #: и описания»).
 _NEEDS_NEXT = ("participants", "description")
 ADVANCE_DELAY_SECONDS = 0.5
+# Изменение встречи — не обход всех полей, а вопрос «что поменять»
+# (пожелание: «перенести встречу — это дата и время с продолжительностью, а
+# не всё; изменение — вопрос, что поменять»).
+_MENU_FIRST = "Что поменять? Например: время начала, дату, продолжительность, участников, тему или место"
+_MENU_NEXT = "Что ещё поменять? Или скажите сохранить"
+_MENU_DONE = ("всё", "все", "ничего", "хватит", "готово", "достаточно")
+_RESCHEDULE_STEPS = ("date", "time", "duration")
+#: «измени время начала на десять», «поменяй продолжительность на час»
+_CHANGE_VERBS = (
+    "измени", "изменить", "поменяй", "поменять", "смени", "сменить", "поставь", "поставить",
+    "установи", "установить", "сделай", "сделать",
+)
+#: Слова между полем и значением: «время начала на десять», «тему встречи на …».
+_VALUE_FILLERS = ("начала", "встречи", "на")
 _DIALOG_YES = ("да", "давай", "конечно", "угу", "ага")
 _DIALOG_NO = ("нет", "не", "неа", "подожди")
 
@@ -512,6 +533,9 @@ class _Dialog:
     calendars: list[dict] = field(default_factory=list)
     edit: bool = False  # правка существующей встречи: «дальше» оставляет поле как есть
     description: list[str] = field(default_factory=list)  # описание диктуется несколькими фразами
+    menu: bool = False  # «Что поменять?» — ждём любую правку, а не ответ на вопрос по полю
+    then_menu: bool = False  # после вопросов по шагам (перенос) перейти к «Что ещё поменять?»
+    awaiting_save: bool = False  # спросили «Сохранить изменения?»
 
     @property
     def field(self) -> str | None:
@@ -531,6 +555,10 @@ def _dialog_question() -> str:
         return ""
     current = _dialog.field
     if current is None:
+        if _dialog.then_menu:
+            _dialog.menu = True
+        if _dialog.menu:
+            return _DIALOG_FINAL_EDIT if _dialog.awaiting_save else _MENU_NEXT
         return _DIALOG_FINAL_EDIT if _dialog.edit else _DIALOG_FINAL
     try:
         _redmail_event_form_focus(current)
@@ -559,6 +587,40 @@ def _start_dialog(named: set[str], *, edit: bool = False) -> str:
     return _dialog_question()
 
 
+def _start_menu(steps: tuple[str, ...] = ()) -> str:
+    """Правка открытой встречи: сначала вопросы по steps (перенос), затем
+    «Что ещё поменять?». Без steps — сразу режим «что поменять»."""
+    global _dialog
+    _dialog = _Dialog(steps=list(steps), edit=True, then_menu=True, menu=not steps)
+    return _dialog_question() if steps else _MENU_FIRST
+
+
+def _menu_follow(reply: FormReply) -> FormReply:
+    """В режиме «что поменять» после правки — следующий вопрос. Если помощник
+    сейчас что-то уточняет (номер в адресной книге, кого убрать) — не мешаем."""
+    if _dialog is None or not _dialog.menu or _picker_open or _pending_removal or reply.finished or reply.question:
+        return reply
+    spoken = f"{reply.spoken}. {_MENU_NEXT}" if reply.spoken else _MENU_NEXT
+    return FormReply(handled=True, spoken=spoken, question=True, delay=ADVANCE_DELAY_SECONDS)
+
+
+def _field_by_stem(word: str, keyword_map: dict[str, str]) -> str | None:
+    """«дату», «тему», «участников», «времени» — поле по основе слова."""
+    for keyword, field_name in keyword_map.items():
+        if " " not in keyword and _word_matches(word, keyword):
+            return field_name
+    return None
+
+
+def wants_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, words: EventFormWords | None = None) -> bool:
+    """Фраза со словом активации, пока идёт разговор о встрече или открыта
+    адресная книга: «вика отмена», «вика время на десять» — это окну встречи,
+    а не новая команда (иначе «отменить» совпадало с командой отмены встречи)."""
+    if not (_dialog is not None or _event_dialog is not None or _picker_open or _pending_removal):
+        return False
+    return looks_like_form_phrase(text, wake_word=wake_word, fuzzy_threshold=fuzzy_threshold, words=words)
+
+
 def _stop_dialog() -> None:
     global _dialog, _event_dialog
     _dialog = None
@@ -569,6 +631,8 @@ def _stop_dialog() -> None:
 def _answered(field_name: str, spoken: str | None = None) -> FormReply:
     """Поле заполнено. Если это был ответ на текущий вопрос и ответ однозначный —
     пауза и следующий вопрос; иначе — только сигнал (или spoken)."""
+    if _dialog is not None and _dialog.menu:
+        return _menu_follow(FormReply(handled=True, spoken=spoken))
     if _dialog is not None and _dialog.field == field_name and field_name not in _NEEDS_NEXT:
         _dialog.index += 1
         question = _dialog_question()
@@ -579,7 +643,7 @@ def _answered(field_name: str, spoken: str | None = None) -> FormReply:
     return FormReply(handled=True, spoken=spoken)
 
 
-_PARTICIPANT_FILLERS = ("и", "а", "также", "ещё", "еще")
+_PARTICIPANT_FILLERS = ("и", "а", "также", "ещё", "еще", "добавь", "добавить", "пригласи", "пригласить")
 
 
 def _default_form_words() -> EventFormWords:
@@ -654,12 +718,17 @@ def handle_form_phrase(
     if _picker_open:
         reply = handle_picker_phrase(tokens)
         if reply is not None:
-            return reply
+            return _menu_follow(reply)
     if _pending_removal:
-        return _removal_choice(tokens)
+        return _menu_follow(_removal_choice(tokens))
+    if len(tokens) > 1 and tokens[0] in _CHANGE_VERBS:
+        # «измени время начала на десять» — глагол не нужен, дальше как «время на десять»
+        tokens = tokens[1:]
+        first, rest_words = tokens[0], tokens[1:]
+        rest = " ".join(rest_words)
     removed = _remove_participants_command(tokens)
     if removed is not None:
-        return removed
+        return _menu_follow(removed)
     listed = _list_participants_command(tokens)
     if listed is not None:
         return listed
@@ -674,7 +743,7 @@ def handle_form_phrase(
         if _dialog is not None and first in form_words.back:
             _dialog.index = max(_dialog.index - 1, 0)
             return FormReply(handled=True, spoken=_dialog_question(), question=True)
-        final_step = _dialog is not None and _dialog.field is None
+        final_step = _dialog is not None and _dialog.field is None and (not _dialog.menu or _dialog.awaiting_save)
         # «Да» сохраняет, только если это вся фраза: сохранение встречи
         # Exchange рассылает приглашения, а «да» из разговора рядом с
         # микрофоном («да, я понял, что…») не должно их отправить.
@@ -688,16 +757,29 @@ def handle_form_phrase(
             _stop_dialog()
             return FormReply(handled=True, spoken="Отменено", finished=True)
         if final_step and short_answer and first in _DIALOG_NO:
+            if _dialog.menu:
+                _dialog.awaiting_save = False
+                return FormReply(handled=True, spoken=_MENU_NEXT, question=True)
             _stop_dialog()
             return FormReply(handled=True, spoken="Хорошо. Поправьте поля или скажите сохранить")
+        if _dialog is not None and _dialog.menu and short_answer and first in _MENU_DONE:
+            _dialog.awaiting_save = True
+            return FormReply(handled=True, spoken=_DIALOG_FINAL_EDIT, question=True)
 
-        field = keyword_map.get(first)
+        field = keyword_map.get(first) or _field_by_stem(first, keyword_map)
+        if field is not None:
+            fillers = _VALUE_FILLERS if field in ("date", "time", "duration", "subject", "recurrence") else ("начала", "встречи")
+            while rest_words and rest_words[0] in fillers:
+                rest_words = rest_words[1:]
+            rest = " ".join(rest_words)
         if field is None:
             # Помощник только что спросил «уточните имя» — ответом служит
             # голое имя без слова «участники» («евгений»), если оно
             # выбирает кого-то из запомненных кандидатов.
             if _pending_candidates and _local_matches(tokens, _pending_candidates):
                 return _set_participants(tokens)
+            if _dialog is not None and _dialog.menu:
+                return FormReply(handled=True, spoken=f"Не поняла. {_MENU_NEXT}", question=True)
             if _dialog is None or _dialog.field is None:
                 return FormReply(handled=False)
             # Разговорный режим: вся фраза — ответ на текущий вопрос.
@@ -705,7 +787,10 @@ def handle_form_phrase(
             rest_words = tokens
             rest = " ".join(tokens)
         if field == "participants":
-            return _set_participants(rest_words)
+            if rest_words and rest_words[0] in _REMOVE_VERBS:
+                # «участников: удали Смирнова»
+                return _menu_follow(_remove_participants_command(rest_words))
+            return _menu_follow(_set_participants(rest_words))
         if not rest:
             return FormReply(handled=True)  # одно слово "тема" без значения — ждём дальше
         if field == "subject":
@@ -760,6 +845,7 @@ def handle_form_phrase(
                 _redmail_event_form_set(description=" ".join(_dialog.description))
             else:
                 _redmail_event_form_set(description=rest)
+                return _menu_follow(FormReply(handled=True))
         return FormReply(handled=True)
     except RedmailError as exc:
         if _form_closed(exc):
@@ -1260,6 +1346,8 @@ def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, w
     form_words = words if words is not None and words.fields else _default_form_words()
     stripped = strip_wake_word(text, wake_word, fuzzy_threshold)
     tokens = (stripped if stripped is not None else text).split()
+    if len(tokens) > 1 and tokens[0] in _CHANGE_VERBS:
+        tokens = tokens[1:]
     if not tokens:
         return False
     if _picker_open:
@@ -1272,7 +1360,12 @@ def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, w
     joined = " ".join(tokens)
     if any(joined.startswith(p) for p in _LIST_PHRASES + _PICKER_OPEN_PHRASES):
         return True
-    if tokens[0] in _keyword_map(form_words) or tokens[0] in form_words.save or tokens[0] in form_words.cancel:
+    keyword_map = _keyword_map(form_words)
+    if tokens[0] in keyword_map or tokens[0] in form_words.save or tokens[0] in form_words.cancel:
+        return True
+    if _dialog is not None and _field_by_stem(tokens[0], keyword_map):
+        return True
+    if _dialog is not None and _dialog.menu and tokens[0] in _MENU_DONE + _DIALOG_YES + _DIALOG_NO:
         return True
     if _dialog is not None and (tokens[0] in form_words.next or tokens[0] in form_words.back):
         # Режим погас по тишине, а вопрос остался: «дальше» его продолжает.
