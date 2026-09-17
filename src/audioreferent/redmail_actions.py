@@ -149,35 +149,50 @@ def redmail_create_event(args: dict[str, Any]) -> None:
     _call(args, _redmail_create_event, subject=subject, start=start, duration_minutes=60)
 
 
-def redmail_reschedule_event(args: dict[str, Any]) -> None:
-    """"перенеси встречу <тема> [<старая дата>] [<старое время>] на
-    <новая дата> <новое время>" — обе даты опциональны, обе по умолчанию
-    сегодня; новое время назвать обязательно, старое используется только
-    чтобы отличить событие, если по теме+дню нашлось несколько."""
+def redmail_reschedule_event(args: dict[str, Any]) -> FormSession:
+    """"перенеси встречу [<тема>] [<старый день/время>] [на <новый день/время>]" —
+    тот же разговор, что «измени встречу» (перенос и изменение — одно). Если
+    новое время названо сразу, после выбора встречи оно подставляется в окно
+    и помощник спрашивает только «Сохранить изменения?»."""
     today = date_cls.today()
     text = str(args.get("remainder", "")).strip()
-    words = text.split()
-    split = _split_on_last_word(words, "на")
-    if split is None:
-        raise ActionError("Не расслышала, на какое время перенести")
-    head_words, tail_words = split
+    new_date = new_time = shift = None
+    split = _split_on_last_word(text.split(), "на")
+    if split is not None:
+        head_words, tail_words = split
+        tail = " ".join(tail_words)
+        _leftover, new_date, new_time = ru_datetime.extract(tail, today=today)
+        if new_date is None and new_time is None:
+            if any(word in tail_words for word in _TIME_OF_DAY_WORDS):
+                new_time = _with_part_of_day(ru_datetime.parse_time("в " + tail), tail_words)  # время, а не сдвиг
+            else:
+                minutes = ru_datetime.parse_duration(tail)
+                if minutes:
+                    # «на 30 минут», «на час раньше» — сдвиг от нынешнего начала
+                    shift = -minutes if any(word in tail_words for word in _SHIFT_BACK_WORDS) else minutes
+                else:
+                    new_time = ru_datetime.parse_time("в " + tail)  # «на десять»
+        if new_date is not None or new_time is not None or shift:
+            text = " ".join(head_words)
+    return _begin_event_dialog(
+        "edit", {**args, "remainder": text}, new_date=new_date, new_time=new_time, shift_minutes=shift
+    )
 
-    _leftover, new_date, new_time = ru_datetime.extract(" ".join(tail_words), today=today)
-    if new_time is None and new_date is None:
-        raise ActionError("Не расслышала, на какое время перенести")
-    if new_date is None:
-        new_date = today
 
-    subject, old_date, old_time = ru_datetime.extract(" ".join(head_words), today=today)
-    if old_date is None:
-        old_date = today
+_TIME_OF_DAY_WORDS = ("утра", "дня", "вечера", "ночи")
 
-    event = _find_single_event(args, subject, old_date, old_time)
-    if new_time is None:
-        # Названа только дата («на завтра») — время встречи остаётся прежним.
-        new_time = _local_hour_minute(event["start"])
-    new_start = f"{new_date.isoformat()}T{new_time[0]:02d}:{new_time[1]:02d}:00"
-    _call(args, _redmail_update_event, event["uid"], start=new_start)
+
+def _with_part_of_day(value: tuple[int, int] | None, words: list[str]) -> tuple[int, int] | None:
+    """«два часа дня» → 14:00, «восемь вечера» → 20:00, «двенадцать ночи» → 00:00."""
+    if value is None:
+        return None
+    hour, minute = value
+    if ("дня" in words or "вечера" in words) and hour < 12:
+        hour += 12
+    elif "ночи" in words and hour == 12:
+        hour = 0
+    return hour, minute
+_SHIFT_BACK_WORDS = ("раньше", "назад")
 
 
 def redmail_cancel_event(args: dict[str, Any]) -> FormSession:
@@ -218,6 +233,10 @@ class _EventDialog:
     candidates: list[dict] = field(default_factory=list)
     event: dict | None = None
     scope: str | None = None
+    # «перенеси … на завтра в десять»: новое время, названное сразу
+    new_date: date_cls | None = None
+    new_time: tuple[int, int] | None = None
+    shift_minutes: int | None = None  # «перенеси на 30 минут» / «на час раньше»
 
 
 _event_dialog: _EventDialog | None = None
@@ -240,11 +259,15 @@ def _search_events(text: str) -> list[dict] | None:
     if not subject and on_date is None:
         return None
     days = [on_date] if on_date is not None else [today + timedelta(days=i) for i in range(_EVENT_SEARCH_DAYS)]
+    subject_words = [w for w in subject.split() if w not in ("встречу", "встреча", "событие", "мероприятие")]
     found: list[dict] = []
     for day in days:
+        # Тему сравниваем здесь, по основам слов: «планерку» — это «Планёрка».
         found = [
-            e for e in _redmail_find_events(subject=subject or None, date=day.isoformat())
-            if e.get("status") != "cancelled"
+            e for e in _redmail_find_events(subject=None, date=day.isoformat())
+            if e.get("status") != "cancelled" and all(
+                any(_word_matches(q, w) for w in str(e.get("summary", "")).split()) for q in subject_words
+            )
         ]
         if found:
             break
@@ -254,12 +277,17 @@ def _search_events(text: str) -> list[dict] | None:
     return found
 
 
-def _begin_event_dialog(action: str, args: dict[str, Any]) -> FormSession:
+def _begin_event_dialog(
+    action: str, args: dict[str, Any], *, new_date: date_cls | None = None, new_time: tuple[int, int] | None = None,
+    shift_minutes: int | None = None,
+) -> FormSession:
     global _event_dialog
     _stop_dialog()
-    _event_dialog = _EventDialog(action=action)
+    _event_dialog = _EventDialog(action=action, new_date=new_date, new_time=new_time, shift_minutes=shift_minutes)
     text = str(args.get("remainder", "")).strip()
     if not text:
+        if new_date is not None or new_time is not None or shift_minutes:
+            return FormSession(question="Какую встречу перенести? Назовите тему или день")
         return FormSession(question=_WHICH_QUESTION[action])
     try:
         events = _call(args, _search_events, text)
@@ -324,6 +352,27 @@ def _event_next_after_choice() -> FormReply:
     _redmail_event_form_open(**fields)
     _event_dialog = None
     question = _start_dialog(set(), edit=True)
+    if dialog.shift_minutes:
+        moved = datetime.fromisoformat(event["start"]).astimezone() + timedelta(minutes=dialog.shift_minutes)
+        _redmail_event_form_set(date=moved.date().isoformat(), time=f"{moved.hour:02d}:{moved.minute:02d}")
+        _dialog.index = len(_dialog.steps)  # всё названо сразу — только подтверждение
+        return FormReply(
+            handled=True,
+            spoken=f"Перенесла на {moved.day} {_MONTHS_GENITIVE[moved.month]} в {moved:%H:%M}. {_dialog_question()}",
+            question=True,
+        )
+    if dialog.new_date is not None or dialog.new_time is not None:
+        changes: dict[str, Any] = {}
+        when: list[str] = []
+        if dialog.new_date is not None:
+            changes["date"] = dialog.new_date.isoformat()
+            when.append(f"{dialog.new_date.day} {_MONTHS_GENITIVE[dialog.new_date.month]}")
+        if dialog.new_time is not None:
+            changes["time"] = f"{dialog.new_time[0]:02d}:{dialog.new_time[1]:02d}"
+            when.append(f"в {changes['time']}")
+        _redmail_event_form_set(**changes)
+        _dialog.index = len(_dialog.steps)  # всё названо сразу — только подтверждение
+        return FormReply(handled=True, spoken=f"Перенесла на {' '.join(when)}. {_dialog_question()}", question=True)
     return FormReply(
         handled=True, spoken=f"Открыла встречу. Скажите дальше, чтобы оставить поле как есть. {question}",
         question=True,

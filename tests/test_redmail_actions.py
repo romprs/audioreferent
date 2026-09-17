@@ -84,61 +84,70 @@ def test_create_event_requires_time():
 # ---------------------------------------------------------------------------
 
 
-def test_reschedule_finds_event_and_updates_start():
-    with patch(
-        "audioreferent.redmail_actions._redmail_find_events", return_value=[_event()]
-    ) as mock_find, patch("audioreferent.redmail_actions._redmail_update_event") as mock_update, patch(
-        "audioreferent.redmail_actions.date_cls"
-    ) as mock_date:
+def _reschedule(remainder, events):
+    """Команда переноса; окно встречи и его поля подменены."""
+    with patch(FORM + "_redmail_find_events", return_value=events) as mock_find, patch(FORM + "date_cls") as mock_date, \
+            patch(FORM + "_redmail_event_form_open") as mock_open, patch(FORM + "_redmail_event_form_set") as mock_set, \
+            patch(FORM + "_redmail_list_calendars", return_value=[]), patch(FORM + "_redmail_event_form_focus"), \
+            patch(FORM + "_launch_redmail") as mock_launch:
         mock_date.today.return_value = TODAY
-        redmail_actions.redmail_reschedule_event(
-            {"remainder": "совещание на десятое сентября в пятнадцать тридцать"}
-        )
-    mock_find.assert_called_once_with(subject="совещание", date="2026-09-08")
-    mock_update.assert_called_once_with("uid-1", start="2026-09-10T15:30:00")
+        session = redmail_actions.redmail_reschedule_event({"remainder": remainder})
+    assert not mock_launch.called
+    return session, mock_find, mock_open, mock_set
 
 
-def test_reschedule_requires_na_separator():
-    with pytest.raises(ActionError, match="перенести"):
-        redmail_actions.redmail_reschedule_event({"remainder": "совещание в десять"})
+def test_reschedule_is_the_edit_dialog_with_new_time_applied():
+    session, mock_find, mock_open, mock_set = _reschedule(
+        "совещание на десятое сентября в пятнадцать тридцать", [_event(uid="uid-1")]
+    )
+    mock_find.assert_called_once_with(subject=None, date="2026-09-08")
+    mock_open.assert_called_once_with(uid="uid-1")
+    mock_set.assert_called_once_with(date="2026-09-10", time="15:30")
+    assert session.question == "Перенесла на 10 сентября в 15:30. Сохранить изменения?"
 
 
-def test_reschedule_requires_new_date_or_time():
-    # ни даты, ни времени после «на» — переносить некуда
-    with pytest.raises(ActionError, match="время"):
-        redmail_actions.redmail_reschedule_event({"remainder": "совещание на потом"})
+def test_reschedule_by_minutes_shifts_from_current_start():
+    start = "2026-09-08T10:00:00+09:00"
+    session, _find, _open, mock_set = _reschedule("планерку на 30 минут", [_event(uid="p", summary="Планёрка", start=start)])
+    local = __import__("datetime").datetime.fromisoformat(start).astimezone()
+    moved = local + __import__("datetime").timedelta(minutes=30)
+    mock_set.assert_called_once_with(date=moved.date().isoformat(), time=f"{moved.hour:02d}:{moved.minute:02d}")
+    assert session.question.endswith("Сохранить изменения?")
+    _session, _find, _open, mock_set = _reschedule("планерку на час раньше", [_event(uid="p", summary="Планёрка", start=start)])
+    earlier = local - __import__("datetime").timedelta(hours=1)
+    assert mock_set.call_args[1]["time"] == f"{earlier.hour:02d}:{earlier.minute:02d}"
+    # «на два часа дня» — время, а не сдвиг на два часа
+    _session, _find, _open, mock_set = _reschedule("планерку на два часа дня", [_event(uid="p", summary="Планёрка", start=start)])
+    mock_set.assert_called_once_with(time="14:00")
 
 
-def test_reschedule_no_matching_event():
-    with patch("audioreferent.redmail_actions._redmail_find_events", return_value=[]):
-        with pytest.raises(ActionError, match="не найдено"):
-            redmail_actions.redmail_reschedule_event({"remainder": "совещание на завтра в десять"})
+def test_reschedule_opens_form_sets_time_and_asks_to_save():
+    events = [_event(uid="a", start="2026-09-08T00:30:00+00:00"), _event(uid="b", start="2026-09-08T03:00:00+00:00")]
+    session, *_rest = _reschedule("совещание на завтра в десять", events)
+    assert session.question.startswith("Найдено 2:")
+    with patch(FORM + "_redmail_event_form_open") as mock_open, patch(FORM + "_redmail_event_form_set") as mock_set, \
+            patch(FORM + "_redmail_list_calendars", return_value=[]), patch(FORM + "_redmail_event_form_focus"):
+        reply = _form_phrase("второй")
+    mock_open.assert_called_once_with(uid="b")
+    mock_set.assert_called_once_with(date="2026-09-09", time="10:00")
+    assert reply.spoken == "Перенесла на 9 сентября в 10:00. Сохранить изменения?"
+    with patch(FORM + "_redmail_event_form_save") as mock_save:
+        reply = _form_phrase("да")
+    mock_save.assert_called_once_with()
+    assert reply.finished
 
 
-def test_reschedule_ambiguous_events_narrowed_by_old_time():
-    other = _event(uid="uid-other", start="2026-09-08T09:00:00+00:00")
-    matching = _event(uid="uid-match", start="2026-09-08T12:00:00+00:00")
-    hour_minutes = {other["start"]: (9, 0), matching["start"]: (12, 0)}
-    with patch(
-        "audioreferent.redmail_actions._redmail_find_events", return_value=[other, matching]
-    ), patch("audioreferent.redmail_actions._redmail_update_event") as mock_update, patch(
-        "audioreferent.redmail_actions._local_hour_minute", side_effect=lambda iso: hour_minutes[iso]
-    ), patch("audioreferent.redmail_actions.date_cls") as mock_date:
-        mock_date.today.return_value = TODAY
-        # старое время "в двенадцать" должно выбрать событие uid-match среди двух
-        redmail_actions.redmail_reschedule_event(
-            {"remainder": "совещание в двенадцать на завтра в десять"}
-        )
-    mock_update.assert_called_once_with("uid-match", start="2026-09-09T10:00:00")
+def test_reschedule_date_only_keeps_the_time():
+    session, _find, _open, mock_set = _reschedule("планёрка на пятнадцатого сентября", [_event(uid="uid-1", summary="Планёрка")])
+    mock_set.assert_called_once_with(date="2026-09-15")  # время в окне остаётся прежним
+    assert session.question == "Перенесла на 15 сентября. Сохранить изменения?"
 
 
-def test_reschedule_ambiguous_without_hint_raises():
-    with patch(
-        "audioreferent.redmail_actions._redmail_find_events",
-        return_value=[_event(uid="a"), _event(uid="b")],
-    ):
-        with pytest.raises(ActionError, match="несколько"):
-            redmail_actions.redmail_reschedule_event({"remainder": "совещание на завтра в десять"})
+def test_reschedule_without_new_time_asks_fields_like_edit():
+    session, *_rest = _reschedule("", [])
+    assert session.question == "Какую встречу изменить? Назовите тему или день"
+    session, *_rest = _reschedule("на завтра", [])
+    assert session.question == "Какую встречу перенести? Назовите тему или день"
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +245,13 @@ def test_event_form_opens_empty_when_nothing_said():
 
 
 def test_event_form_edit_finds_own_event_by_subject():
-    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-7")]) as mock_find, patch(
+    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-7", summary="Планёрка")]) as mock_find, patch(
         FORM + "_redmail_event_form_open"
     ) as mock_open, patch(FORM + "date_cls") as mock_date, patch(FORM + "_redmail_list_calendars", return_value=[]), \
             patch(FORM + "_redmail_event_form_focus"):
         mock_date.today.return_value = TODAY
         session = redmail_actions.redmail_event_form({"remainder": "планёрка", "edit": True})
-    mock_find.assert_called_once_with(subject="планёрка", date="2026-09-08")
+    mock_find.assert_called_once_with(subject=None, date="2026-09-08")
     mock_open.assert_called_once_with(uid="uid-7")
     assert session.question == "Открыла встречу. Скажите дальше, чтобы оставить поле как есть. Какая тема встречи?"
     assert redmail_actions.dialog_is_active() and redmail_actions._dialog.edit
@@ -554,15 +563,6 @@ def test_participants_mixed_outcomes_in_one_phrase():
     )
 
 
-def test_reschedule_with_date_only_keeps_the_event_time():
-    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-1", start="2026-09-08T07:30:00+00:00")]), patch(
-        FORM + "_redmail_update_event"
-    ) as mock_update, patch(FORM + "_local_hour_minute", return_value=(10, 30)), patch(FORM + "date_cls") as mock_date:
-        mock_date.today.return_value = TODAY
-        redmail_actions.redmail_reschedule_event({"remainder": "планёрка на пятнадцатого сентября"})
-    mock_update.assert_called_once_with("uid-1", start="2026-09-15T10:30:00")  # родительный падеж даты, время прежнее
-
-
 def test_form_phrase_date_with_time_sets_both():
     with patch(FORM + "_redmail_event_form_set") as mock_set:
         reply = _form_phrase("дата пятнадцатое сентября четырнадцать ноль ноль")
@@ -843,3 +843,21 @@ def test_yes_inside_long_phrase_does_not_save():
     with patch(FORM + "_redmail_event_form_save") as mock_save, patch(FORM + "_redmail_event_form_set"):
         reply, _focus = _dialog_phrase("да я тебе потом перезвоню насчёт отчёта")
     assert not mock_save.called and not reply.finished
+
+
+def test_short_verbs_start_event_dialogs_and_longest_phrase_wins():
+    from audioreferent.commands import CommandRegistry
+    from audioreferent.config import Config, _read_default_config
+
+    registry = CommandRegistry(Config.from_dict(_read_default_config()).commands)
+    match = registry.match("вика перенеси планерку на 30 минут")
+    assert match.spec.action == "redmail_reschedule_event" and match.remainder == "планерку на 30 минут"
+    assert registry.match("вика отмени встречу совещание").remainder == "совещание"
+
+
+def test_subject_is_matched_by_word_stems():
+    events = [_event(uid="p", summary="Планёрка отдела"), _event(uid="o", summary="Оперативка")]
+    with patch(FORM + "_redmail_find_events", return_value=events), patch(FORM + "date_cls") as mock_date:
+        mock_date.today.return_value = TODAY
+        found = redmail_actions._search_events("планерку")
+    assert [e["uid"] for e in found] == ["p"]
