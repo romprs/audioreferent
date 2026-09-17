@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_cls
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from dataclasses import dataclass, field
@@ -180,15 +180,196 @@ def redmail_reschedule_event(args: dict[str, Any]) -> None:
     _call(args, _redmail_update_event, event["uid"], start=new_start)
 
 
-def redmail_cancel_event(args: dict[str, Any]) -> None:
-    """"отмени встречу <тема> [<дата>]" — дата не названа, значит сегодня."""
+def redmail_cancel_event(args: dict[str, Any]) -> FormSession:
+    """"отмени встречу [<тема>] [<дата>]" — разговор: какую встречу, номер,
+    если нашлось несколько, «этот день или серию» для повторяющейся, «отменить?»."""
+    return _begin_event_dialog("cancel", args)
+
+
+# --- разговор отмены и правки встречи ---------------------------------------
+#
+# Тот же порядок, что при создании встречи (пожелание: «идентичные диалоги на
+# отмену и изменение встречи»): помощник спрашивает, человек отвечает.
+#   1. Какую встречу? — тема и/или день («планёрка», «завтра», «планёрка в пятницу»).
+#   2. Нашлось несколько — «Найдено 3: 1 — …; 2 — … Выберите номер».
+#   3. Повторяющаяся — «Только этот день или всю серию?».
+#   4. Отмена — «Отменить встречу …?» → «да». Правка — открывается окно встречи
+#      на этом дне и идут вопросы по полям; «дальше» оставляет поле как есть.
+
+_EVENT_SEARCH_DAYS = 14
+_EVENT_LIST_LIMIT = 5
+_SCOPE_ONE_WORDS = ("этот", "эту", "только", "день", "один", "одну", "сегодняшний")
+_SCOPE_ALL_WORDS = ("серию", "серия", "всю", "все", "всё", "целиком", "полностью")
+_EVENT_DIALOG_STOP = ("стоп", "хватит", "отбой", "отмена")
+_WHICH_QUESTION = {
+    "cancel": "Какую встречу отменить? Назовите тему или день",
+    "edit": "Какую встречу изменить? Назовите тему или день",
+}
+_MONTHS_GENITIVE = (
+    "", "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+
+@dataclass
+class _EventDialog:
+    action: str  # cancel | edit
+    step: str = "which"  # which | number | scope | confirm
+    candidates: list[dict] = field(default_factory=list)
+    event: dict | None = None
+    scope: str | None = None
+
+
+_event_dialog: _EventDialog | None = None
+
+
+def event_dialog_is_active() -> bool:
+    return _event_dialog is not None
+
+
+def _describe_event(event: dict) -> str:
+    start = datetime.fromisoformat(event["start"]).astimezone()
+    return f"«{event.get('summary', '')}» {start.day} {_MONTHS_GENITIVE[start.month]} в {start:%H:%M}"
+
+
+def _search_events(text: str) -> list[dict] | None:
+    """Свои встречи по теме и/или дню. День не назван — ближайшие две недели,
+    до первого дня с совпадениями. None — ни темы, ни дня не разобрать."""
     today = date_cls.today()
-    text = str(args.get("remainder", "")).strip()
     subject, on_date, on_time = ru_datetime.extract(text, today=today)
-    if on_date is None:
-        on_date = today
-    event = _find_single_event(args, subject, on_date, on_time)
-    _call(args, _redmail_cancel_event, event["uid"])
+    if not subject and on_date is None:
+        return None
+    days = [on_date] if on_date is not None else [today + timedelta(days=i) for i in range(_EVENT_SEARCH_DAYS)]
+    found: list[dict] = []
+    for day in days:
+        found = [
+            e for e in _redmail_find_events(subject=subject or None, date=day.isoformat())
+            if e.get("status") != "cancelled"
+        ]
+        if found:
+            break
+    if len(found) > 1 and on_time is not None:
+        narrowed = [e for e in found if _local_hour_minute(e["start"]) == on_time]
+        found = narrowed or found
+    return found
+
+
+def _begin_event_dialog(action: str, args: dict[str, Any]) -> FormSession:
+    global _event_dialog
+    _stop_dialog()
+    _event_dialog = _EventDialog(action=action)
+    text = str(args.get("remainder", "")).strip()
+    if not text:
+        return FormSession(question=_WHICH_QUESTION[action])
+    try:
+        events = _call(args, _search_events, text)
+        reply = _call(args, _event_found, events)
+    except ActionError:
+        _stop_dialog()
+        raise
+    if reply.finished:
+        _stop_dialog()
+        raise ActionError(reply.spoken or "Не удалось выполнить команду")
+    return FormSession(question=reply.spoken)
+
+
+def _event_found(events: list[dict] | None) -> FormReply:
+    dialog = _event_dialog
+    if events is None:
+        return FormReply(handled=True, spoken="Не разобрала. Назовите тему или день", question=True)
+    if not events:
+        return FormReply(handled=True, spoken="Встреча не найдена. Назовите тему или день ещё раз", question=True)
+    own = [e for e in events if e.get("is_organizer", True)]
+    if not own:
+        return FormReply(handled=True, spoken="Изменить можно только свою встречу", finished=True)
+    if len(own) == 1:
+        return _event_chosen(own[0])
+    dialog.candidates = own[:_EVENT_LIST_LIMIT]
+    dialog.step = "number"
+    listed = "; ".join(f"{i} — {_describe_event(e)}" for i, e in enumerate(dialog.candidates, 1))
+    more = f" Первые {_EVENT_LIST_LIMIT}." if len(own) > _EVENT_LIST_LIMIT else ""
+    return FormReply(handled=True, spoken=f"Найдено {len(own)}: {listed}.{more} Выберите номер", question=True)
+
+
+def _event_chosen(event: dict) -> FormReply:
+    dialog = _event_dialog
+    dialog.event = event
+    if event.get("recurring"):
+        dialog.step = "scope"
+        return FormReply(
+            handled=True, spoken=f"{_describe_event(event)} — повторяющаяся встреча. Только этот день или всю серию?",
+            question=True,
+        )
+    dialog.scope = None
+    return _event_next_after_choice()
+
+
+def _event_next_after_choice() -> FormReply:
+    global _event_dialog
+    dialog = _event_dialog
+    event = dialog.event
+    if dialog.action == "cancel":
+        dialog.step = "confirm"
+        if dialog.scope == "all":
+            question = f"Отменить всю серию «{event.get('summary', '')}»?"
+        elif dialog.scope == "one":
+            question = f"Отменить встречу {_describe_event(event)} — только этот день?"
+        else:
+            question = f"Отменить встречу {_describe_event(event)}?"
+        return FormReply(handled=True, spoken=question, question=True)
+    fields: dict[str, Any] = {"uid": event["uid"]}
+    if event.get("recurring"):
+        fields["occurrence_start"] = event["start"]
+        fields["scope"] = dialog.scope or "one"
+    _redmail_event_form_open(**fields)
+    _event_dialog = None
+    question = _start_dialog(set(), edit=True)
+    return FormReply(
+        handled=True, spoken=f"Открыла встречу. Скажите дальше, чтобы оставить поле как есть. {question}",
+        question=True,
+    )
+
+
+def handle_event_dialog_phrase(tokens: list[str]) -> FormReply:
+    """Фраза в разговоре отмены или правки встречи."""
+    dialog = _event_dialog
+    if len(tokens) <= 2 and tokens[0] in _EVENT_DIALOG_STOP:
+        _stop_dialog()
+        return FormReply(handled=True, spoken="Хорошо", finished=True)
+    try:
+        if dialog.step == "which":
+            return _event_found(_search_events(" ".join(tokens)))
+        if dialog.step == "number":
+            numbers = _picker_numbers([t for t in tokens if t not in ("номер", "под")])
+            if len(numbers) != 1 or not 1 <= numbers[0] <= len(dialog.candidates):
+                return FormReply(handled=True, spoken="Не разобрала, повторите номер", question=True)
+            return _event_chosen(dialog.candidates[numbers[0] - 1])
+        if dialog.step == "scope":
+            if any(t in _SCOPE_ALL_WORDS for t in tokens):
+                dialog.scope = "all"
+            elif any(t in _SCOPE_ONE_WORDS for t in tokens):
+                dialog.scope = "one"
+            else:
+                return FormReply(handled=True, spoken="Не разобрала. Только этот день или всю серию?", question=True)
+            return _event_next_after_choice()
+        # confirm — только отмена
+        if len(tokens) <= 2 and tokens[0] in _DIALOG_YES:
+            event = dialog.event
+            _redmail_cancel_event(
+                event["uid"],
+                occurrence_start=event["start"] if event.get("recurring") else None,
+                scope=dialog.scope or "all",
+                confirmed=True,
+            )
+            _stop_dialog()
+            return FormReply(handled=True, spoken="Встреча отменена", finished=True)
+        if len(tokens) <= 2 and tokens[0] in _DIALOG_NO:
+            _stop_dialog()
+            return FormReply(handled=True, spoken="Хорошо, не отменяю", finished=True)
+        return FormReply(handled=True, spoken="Скажите да или нет", question=True)
+    except RedmailError as exc:
+        _stop_dialog()
+        return FormReply(handled=True, spoken=_spoken_redmail_error(str(exc)), finished=True)
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +408,9 @@ class FormReply:
     spoken_fallback: str | None = None
     # spoken — вопрос разговорного режима: без записи лучше промолчать.
     question: bool = False
+    # Пауза перед spoken, секунды: однозначный ответ принят, следующий вопрос
+    # звучит не вплотную к ответу человека.
+    delay: float = 0.0
 
 
 # --- разговорный режим -----------------------------------------------------
@@ -239,17 +423,28 @@ class FormReply:
 # «назад» — предыдущий. Слова-поля («место кабинет сто») работают как
 # раньше и вопрос не сбивают. В конце — «Сохранить встречу?»: «да» сохраняет.
 
-_DIALOG_ORDER = ("subject", "date", "time", "duration", "calendar", "participants", "location")
+_DIALOG_ORDER = (
+    "subject", "date", "time", "duration", "recurrence", "calendar", "participants", "location", "description",
+)
 _DIALOG_QUESTIONS = {
     "subject": "Какая тема встречи?",
     "date": "На какой день?",
     "time": "Во сколько начало?",
     "duration": "Сколько длится встреча?",
+    "recurrence": "Как повторять? Не повторять, каждый день, каждую неделю или каждый месяц",
     "calendar": "В какой календарь?",
     "participants": "Кого пригласить? Когда закончите, скажите дальше",
     "location": "Где пройдёт встреча?",
+    "description": "Описание встречи? Когда закончите, скажите дальше",
 }
 _DIALOG_FINAL = "Всё заполнено. Сохранить встречу?"
+_DIALOG_FINAL_EDIT = "Сохранить изменения?"
+#: Поля, которые набираются несколькими фразами: к следующему вопросу — только
+#: по «дальше». Остальные отвечаются однозначно — после ответа пауза и
+#: следующий вопрос (пожелание: «слово дальше нужно только для адресной книги
+#: и описания»).
+_NEEDS_NEXT = ("participants", "description")
+ADVANCE_DELAY_SECONDS = 0.5
 _DIALOG_YES = ("да", "давай", "конечно", "угу", "ага")
 _DIALOG_NO = ("нет", "не", "неа", "подожди")
 
@@ -259,6 +454,8 @@ class _Dialog:
     steps: list[str]
     index: int = 0
     calendars: list[dict] = field(default_factory=list)
+    edit: bool = False  # правка существующей встречи: «дальше» оставляет поле как есть
+    description: list[str] = field(default_factory=list)  # описание диктуется несколькими фразами
 
     @property
     def field(self) -> str | None:
@@ -278,7 +475,7 @@ def _dialog_question() -> str:
         return ""
     current = _dialog.field
     if current is None:
-        return _DIALOG_FINAL
+        return _DIALOG_FINAL_EDIT if _dialog.edit else _DIALOG_FINAL
     try:
         _redmail_event_form_focus(current)
     except RedmailError as exc:
@@ -290,7 +487,7 @@ def _dialog_question() -> str:
     return question
 
 
-def _start_dialog(named: set[str]) -> str:
+def _start_dialog(named: set[str], *, edit: bool = False) -> str:
     """Начать разговорный режим; named — поля, уже названные в команде."""
     global _dialog
     try:
@@ -302,13 +499,27 @@ def _start_dialog(named: set[str]) -> str:
         step for step in _DIALOG_ORDER
         if step not in named and not (step == "calendar" and len(calendars) < 2)
     ]
-    _dialog = _Dialog(steps=steps, calendars=calendars)
+    _dialog = _Dialog(steps=steps, calendars=calendars, edit=edit)
     return _dialog_question()
 
 
 def _stop_dialog() -> None:
-    global _dialog
+    global _dialog, _event_dialog
     _dialog = None
+    _event_dialog = None
+
+
+def _answered(field_name: str, spoken: str | None = None) -> FormReply:
+    """Поле заполнено. Если это был ответ на текущий вопрос и ответ однозначный —
+    пауза и следующий вопрос; иначе — только сигнал (или spoken)."""
+    if _dialog is not None and _dialog.field == field_name and field_name not in _NEEDS_NEXT:
+        _dialog.index += 1
+        question = _dialog_question()
+        return FormReply(
+            handled=True, spoken=f"{spoken}. {question}" if spoken else question, question=True,
+            delay=ADVANCE_DELAY_SECONDS,
+        )
+    return FormReply(handled=True, spoken=spoken)
 
 
 _PARTICIPANT_FILLERS = ("и", "а", "также", "ещё", "еще")
@@ -341,10 +552,7 @@ def redmail_event_form(args: dict[str, Any]) -> FormSession:
     text = str(args.get("remainder", "")).strip()
     subject, on_date, on_time = ru_datetime.extract(text, today=today)
     if args.get("edit"):
-        event = _find_single_event(args, subject, on_date or today, on_time)
-        _call(args, _redmail_event_form_open, uid=event["uid"])
-        _stop_dialog()  # правка своей встречи — поля уже заполнены, спрашивать нечего
-        return FormSession()
+        return _begin_event_dialog("edit", args)
     fields: dict[str, Any] = {}
     if subject:
         fields["subject"] = subject
@@ -384,6 +592,8 @@ def handle_form_phrase(
     rest_words = tokens[1:]
     rest = " ".join(rest_words)
 
+    if _event_dialog is not None:
+        return handle_event_dialog_phrase(tokens)
     if _picker_open:
         reply = handle_picker_phrase(tokens)
         if reply is not None:
@@ -438,6 +648,7 @@ def handle_form_phrase(
             return FormReply(handled=True)  # одно слово "тема" без значения — ждём дальше
         if field == "subject":
             _redmail_event_form_set(subject=rest)
+            return _answered(field)
         elif field == "date":
             # «дата пятнадцатое сентября четырнадцать ноль ноль» — дату и,
             # если названо, время (с предлогом «в» или без него).
@@ -450,6 +661,10 @@ def handle_form_phrase(
             if at is not None:
                 changes["time"] = f"{at[0]:02d}:{at[1]:02d}"
             _redmail_event_form_set(**changes)
+            if at is not None and _dialog is not None and _dialog.field == "date" and "time" in _dialog.steps:
+                # «завтра в десять» — ответ сразу на два вопроса: время не спрашиваем.
+                _dialog.steps.remove("time")
+            return _answered(field)
         elif field == "time":
             # поле называют без предлога ("время восемь тридцать") — разбор
             # ждёт "в/на", подставляем
@@ -457,23 +672,32 @@ def handle_form_phrase(
             if value is None:
                 return FormReply(handled=True, spoken="Не поняла время")
             _redmail_event_form_set(time=f"{value[0]:02d}:{value[1]:02d}")
+            return _answered(field)
         elif field == "duration":
             minutes = ru_datetime.parse_duration(rest)
             if minutes is None:
                 return FormReply(handled=True, spoken="Не поняла продолжительность")
             _redmail_event_form_set(duration_minutes=minutes)
+            return _answered(field)
         elif field == "recurrence":
             value = ru_datetime.parse_recurrence(rest)
             if value is None:
                 return FormReply(handled=True, spoken="Не поняла повторение")
             _redmail_event_form_set(recurrence=value)
+            return _answered(field)
         elif field == "calendar":
             state = _redmail_event_form_set(calendar=rest)
-            return FormReply(handled=True, spoken=f"Календарь {state.get('calendar') or rest}")
+            return _answered(field, f"Календарь {state.get('calendar') or rest}")
         elif field == "location":
             _redmail_event_form_set(location=rest)
+            return _answered(field)
         elif field == "description":
-            _redmail_event_form_set(description=rest)
+            if _dialog is not None and _dialog.field == "description":
+                # Описание диктуют несколькими фразами — дописываем.
+                _dialog.description.append(rest)
+                _redmail_event_form_set(description=" ".join(_dialog.description))
+            else:
+                _redmail_event_form_set(description=rest)
         return FormReply(handled=True)
     except RedmailError as exc:
         if _form_closed(exc):
@@ -725,40 +949,41 @@ def _open_picker_for(window: list[str], contacts: list[dict], *, fuzzy: bool = F
     global _picker_open
     who = " ".join(window).capitalize()
     try:
-        _redmail_picker_open(_picker_filter_for(window, contacts, fuzzy))
+        state = _redmail_picker_open(_picker_filter_for(window, contacts, fuzzy))
     except RedmailError as exc:
         log.info("Адресную книгу открыть не удалось (%s) — отвечаю списком", exc)
         return None
     _picker_open = True
+    count = len((state or {}).get("candidates", [])) or len(contacts)
+    # Номер в ответ сразу добавляет участника — «принять» не нужно.
     if fuzzy:
-        return f"{who}: точно не нашла, похожие на экране — выберите номер и скажите принять"
-    return f"{who}: найдено несколько — выберите номер и скажите принять"
+        return f"{who}: точно не нашла. Похожих {count}, выберите номер"
+    return f"{who}: найдено {count}, выберите номер"
+
+
+_PICKER_REPEAT = "Не разобрала, повторите номер"
 
 
 def _picker_select_tokens(tokens: list[str]) -> str | None:
-    """Отметить/снять строки по словам фразы («второй», «первый и третий»,
-    «евгений», «все», «убери второго»). Возвращает, что сказать при
-    неудаче, либо None, если всё отмечено (тогда — только сигнал)."""
+    """Отметить строки по словам фразы («второй», «первый и третий»,
+    «евгений», «все»). Возвращает, что сказать, если выбрать не удалось,
+    либо None — выбрано."""
     if not tokens:
-        return None
-    uncheck = tokens[0] in _PICKER_UNCHECK
-    rest = tokens[1:] if uncheck else tokens
-    if any(t in _PICKER_ALL for t in rest):
-        _redmail_picker_select(all_visible=True, checked=not uncheck)
-        return None
-    numbers = _picker_numbers([t for t in rest if t not in ("и", "номер", "номера")])
+        return _PICKER_REPEAT
+    if any(t in _PICKER_ALL for t in tokens):
+        state = _redmail_picker_select(all_visible=True, checked=True)
+        return None if int(state.get("touched", 1)) else _PICKER_REPEAT
+    numbers = _picker_numbers([t for t in tokens if t not in ("и", "номер", "номера", "под")])
     if numbers:
         touched = 0
         for number in numbers:
-            touched += int(_redmail_picker_select(number=number, checked=not uncheck).get("touched", 0))
-        return None if touched else "Такого номера в списке нет"
-    query_words = [t for t in rest if t not in _PARTICIPANT_FILLERS]
+            touched += int(_redmail_picker_select(number=number, checked=True).get("touched", 0))
+        return None if touched else "Такого номера нет, повторите номер"
+    query_words = [t for t in tokens if t not in _PARTICIPANT_FILLERS]
     if not query_words:
-        return None
-    state = _redmail_picker_select(query=" ".join(query_words), checked=not uncheck)
-    if int(state.get("touched", 0)) == 0:
-        return f"{' '.join(query_words).capitalize()}: в списке нет"
-    return None
+        return _PICKER_REPEAT
+    state = _redmail_picker_select(query=" ".join(query_words), checked=True)
+    return None if int(state.get("touched", 0)) else _PICKER_REPEAT
 
 
 def _picker_finish(spoken: str | None) -> FormReply:
@@ -782,17 +1007,16 @@ def handle_picker_phrase(tokens: list[str]) -> FormReply | None:
     if not tokens:
         return FormReply(handled=False)
     try:
-        # «два принять» одной фразой: сначала отметить, потом принять.
-        accept = tokens[-1] in _PICKER_ACCEPT
-        selection = tokens[:-1] if accept else tokens
-        if not accept and tokens[0] in _PICKER_CANCEL:
+        if tokens[0] in _PICKER_CANCEL:
             _redmail_picker_cancel()
             return _picker_finish("Отмена")
-        problem = _picker_select_tokens(selection) if selection else None
-        if problem and not accept:
-            return FormReply(handled=True, spoken=problem)
-        if not accept:
-            return FormReply(handled=True)
+        # Номер (имя, «все») сразу выбирает и добавляет — без «принять»;
+        # «второй принять» по старой привычке тоже работает.
+        selection = [t for t in tokens if t not in _PICKER_ACCEPT]
+        if selection:
+            problem = _picker_select_tokens(selection)
+            if problem:
+                return FormReply(handled=True, spoken=problem)
         selected = _redmail_picker_accept()
         _remember_names(selected)
         return _picker_finish(None if selected else "Никто не выбран")
@@ -874,7 +1098,7 @@ def _open_picker_command(tokens: list[str]) -> FormReply | None:
                 return FormReply(handled=True, spoken="Не удалось открыть адресную книгу")
             _picker_open = True
             count = len(state.get("candidates", []))
-            return FormReply(handled=True, spoken=f"Адресная книга открыта, в списке {count} — выберите номер и скажите принять")
+            return FormReply(handled=True, spoken=f"Адресная книга открыта, в списке {count} — выберите номер")
     return None
 
 
@@ -888,6 +1112,9 @@ def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, w
         return False
     if _picker_open:
         return True  # книга на экране — любая фраза адресована ей
+    if _event_dialog is not None:
+        # Идёт разговор отмены или правки: номер, «да»/«нет», «этот день»/«серию».
+        return bool(_picker_numbers(tokens)) or tokens[0] in _DIALOG_YES + _DIALOG_NO + _SCOPE_ONE_WORDS + _SCOPE_ALL_WORDS
     joined = " ".join(tokens)
     if any(joined.startswith(p) for p in _LIST_PHRASES + _PICKER_OPEN_PHRASES):
         return True

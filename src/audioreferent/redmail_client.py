@@ -127,8 +127,20 @@ def update_event(uid: str, **changes: Any) -> None:
     send_request("update_event", {"uid": uid, **changes})
 
 
-def cancel_event(uid: str) -> None:
-    send_request("cancel_event", {"uid": uid})
+def cancel_event(
+    uid: str, *, occurrence_start: str | None = None, scope: str | None = None, confirmed: bool = False
+) -> None:
+    """confirmed=True — отменить сразу, без окна подтверждения в почте
+    (помощник уже спросил голосом). occurrence_start — какой день серии
+    (start из find_events), scope — one (только этот день) или all (серия)."""
+    args: dict[str, Any] = {"uid": uid}
+    if occurrence_start:
+        args["occurrence_start"] = occurrence_start
+    if scope:
+        args["scope"] = scope
+    if confirmed:
+        args["confirmed"] = True
+    send_request("cancel_event", args)
 
 
 # --- пошаговая форма встречи (event_form_* в redmail/ipc_server.py) ---

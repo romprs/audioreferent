@@ -146,24 +146,72 @@ def test_reschedule_ambiguous_without_hint_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_event_finds_and_cancels():
-    with patch(
-        "audioreferent.redmail_actions._redmail_find_events", return_value=[_event(uid="uid-9")]
-    ), patch("audioreferent.redmail_actions._redmail_cancel_event") as mock_cancel:
-        redmail_actions.redmail_cancel_event({"remainder": "совещание"})
-    mock_cancel.assert_called_once_with("uid-9")
+def _cancel_dialog(remainder, events):
+    with patch(FORM + "_redmail_find_events", return_value=events) as mock_find, patch(FORM + "date_cls") as mock_date:
+        mock_date.today.return_value = TODAY
+        session = redmail_actions.redmail_cancel_event({"remainder": remainder})
+    return session, mock_find
+
+
+def test_cancel_event_asks_confirmation_and_cancels_without_windows():
+    session, _find = _cancel_dialog("совещание", [_event(uid="uid-9")])
+    assert session.enter_form_mode and session.question.startswith("Отменить встречу «Совещание» 8 сентября в ")
+    assert redmail_actions.event_dialog_is_active()
+    with patch(FORM + "_redmail_cancel_event") as mock_cancel:
+        reply = _form_phrase("да")
+    mock_cancel.assert_called_once_with("uid-9", occurrence_start=None, scope="all", confirmed=True)
+    assert reply.finished and reply.spoken == "Встреча отменена" and not redmail_actions.event_dialog_is_active()
 
 
 def test_cancel_event_wraps_redmail_error_on_cancel():
+    _cancel_dialog("совещание", [_event(uid="uid-9")])
     with patch(
-        "audioreferent.redmail_actions._redmail_find_events", return_value=[_event(uid="uid-9")]
-    ), patch(
-        "audioreferent.redmail_actions._redmail_cancel_event",
+        FORM + "_redmail_cancel_event",
         side_effect=RedmailError("Отменить можно только встречу, которую организовали вы сами."),
     ):
-        # свободный текст redmail сводится к фиксированной фразе, для которой есть запись
-        with pytest.raises(ActionError, match="^Изменить можно только свою встречу$"):
-            redmail_actions.redmail_cancel_event({"remainder": "совещание"})
+        reply = _form_phrase("да")
+    # свободный текст redmail сводится к фиксированной фразе, для которой есть запись
+    assert reply.finished and reply.spoken == "Изменить можно только свою встречу"
+
+
+def test_cancel_dialog_asks_which_then_number_then_scope():
+    session, _find = _cancel_dialog("", [])
+    assert session.question == "Какую встречу отменить? Назовите тему или день"
+    events = [
+        _event(uid="a", summary="Планёрка", start="2026-09-09T00:30:00+00:00"),
+        dict(_event(uid="b", summary="Оперативка", start="2026-09-09T01:30:00+00:00"), recurring=True),
+    ]
+    with patch(FORM + "_redmail_find_events", return_value=events) as mock_find, patch(FORM + "date_cls") as mock_date:
+        mock_date.today.return_value = TODAY
+        reply = _form_phrase("завтра")
+    mock_find.assert_called_once_with(subject=None, date="2026-09-09")
+    assert reply.question and reply.spoken.startswith("Найдено 2: 1 — «Планёрка»") and reply.spoken.endswith("Выберите номер")
+    assert _form_phrase("пятый").spoken == "Не разобрала, повторите номер"
+    reply = _form_phrase("второй")
+    assert reply.spoken.endswith("повторяющаяся встреча. Только этот день или всю серию?")
+    assert _form_phrase("не знаю").spoken == "Не разобрала. Только этот день или всю серию?"
+    reply = _form_phrase("только этот день")
+    assert reply.spoken.startswith("Отменить встречу «Оперативка»") and reply.spoken.endswith("только этот день?")
+    assert redmail_actions.looks_like_form_phrase("да", wake_word="вика", fuzzy_threshold=1)
+    with patch(FORM + "_redmail_cancel_event") as mock_cancel:
+        _form_phrase("да")
+    mock_cancel.assert_called_once_with("b", occurrence_start="2026-09-09T01:30:00+00:00", scope="one", confirmed=True)
+
+
+def test_cancel_dialog_no_and_stop_word():
+    _cancel_dialog("совещание", [_event(uid="uid-9")])
+    with patch(FORM + "_redmail_cancel_event") as mock_cancel:
+        reply = _form_phrase("нет")
+    assert not mock_cancel.called and reply.finished and reply.spoken == "Хорошо, не отменяю"
+    _cancel_dialog("", [])
+    reply = _form_phrase("стоп")
+    assert reply.finished and not redmail_actions.event_dialog_is_active()
+
+
+def test_cancel_dialog_not_found_asks_again():
+    session, _find = _cancel_dialog("совещание", [])
+    assert session.question == "Встреча не найдена. Назовите тему или день ещё раз"
+    assert redmail_actions.event_dialog_is_active()
 
 
 # ---------------------------------------------------------------------------
@@ -190,11 +238,14 @@ def test_event_form_opens_empty_when_nothing_said():
 def test_event_form_edit_finds_own_event_by_subject():
     with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-7")]) as mock_find, patch(
         FORM + "_redmail_event_form_open"
-    ) as mock_open, patch(FORM + "date_cls") as mock_date:
+    ) as mock_open, patch(FORM + "date_cls") as mock_date, patch(FORM + "_redmail_list_calendars", return_value=[]), \
+            patch(FORM + "_redmail_event_form_focus"):
         mock_date.today.return_value = TODAY
-        redmail_actions.redmail_event_form({"remainder": "планёрка", "edit": True})
+        session = redmail_actions.redmail_event_form({"remainder": "планёрка", "edit": True})
     mock_find.assert_called_once_with(subject="планёрка", date="2026-09-08")
     mock_open.assert_called_once_with(uid="uid-7")
+    assert session.question == "Открыла встречу. Скажите дальше, чтобы оставить поле как есть. Какая тема встречи?"
+    assert redmail_actions.dialog_is_active() and redmail_actions._dialog.edit
 
 
 def _form_phrase(text):
@@ -309,7 +360,7 @@ def test_similar_surname_opens_book_on_the_real_spelling():
         reply = _form_phrase("участники бутько")
     mock_set.assert_not_called()
     mock_open.assert_called_once_with("Будько")  # фильтр — настоящая фамилия, а не услышанное
-    assert reply.spoken == "Бутько: точно не нашла, похожие на экране — выберите номер и скажите принять"
+    assert reply.spoken == "Бутько: точно не нашла. Похожих 1, выберите номер"
     redmail_actions._picker_open = False
 
 
@@ -355,31 +406,40 @@ def test_ambiguous_surname_opens_picker_and_describes_numbered_candidates():
         reply = _form_phrase("участники шилкин")
     mock_set.assert_not_called()
     mock_open.assert_called_once_with("шилкин")
-    assert reply.spoken == "Шилкин: найдено несколько — выберите номер и скажите принять"
+    assert reply.spoken == "Шилкин: найдено 2, выберите номер"
     assert redmail_actions.picker_is_open()
     # книга открыта -> любая фраза считается фразой формы даже без активационного слова
     assert redmail_actions.looks_like_form_phrase("второй", wake_word="вика", fuzzy_threshold=1)
 
-    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
-        assert _form_phrase("второй") == redmail_actions.FormReply(handled=True)
-        mock_select.assert_called_once_with(number=2, checked=True)
-    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
-        _form_phrase("первый и третий")
-        assert [c[1]["number"] for c in mock_select.call_args_list] == [1, 3]
-    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
-        _form_phrase("убери второго")
-        mock_select.assert_called_once_with(number=2, checked=False)
-    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select:
-        _form_phrase("евгений")
-        mock_select.assert_called_once_with(query="евгений", checked=True)
     with patch(FORM + "_redmail_picker_select", return_value={"touched": 0}):
-        assert _form_phrase("сидоров").spoken == "Сидоров: в списке нет"
-    with patch(FORM + "_redmail_picker_select", return_value={"touched": 2}) as mock_select:
-        _form_phrase("все")
-        mock_select.assert_called_once_with(all_visible=True, checked=True)
-    with patch(FORM + "_redmail_picker_accept", return_value=[{"name": "Шилкин Евгений Александрович", "email": "e@x"}]):
-        reply = _form_phrase("принять")
-    assert reply == redmail_actions.FormReply(handled=True)  # после «принять» — только сигнал
+        assert _form_phrase("сидоров").spoken == "Не разобрала, повторите номер"
+        assert _form_phrase("седьмой").spoken == "Такого номера нет, повторите номер"
+    assert redmail_actions.picker_is_open()
+    # номер сразу выбирает и добавляет — без «принять»
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select, patch(
+        FORM + "_redmail_picker_accept", return_value=[{"name": "Шилкин Евгений Александрович", "email": "e@x"}]
+    ) as mock_accept:
+        reply = _form_phrase("второй")
+    mock_select.assert_called_once_with(number=2, checked=True)
+    mock_accept.assert_called_once()
+    assert reply == redmail_actions.FormReply(handled=True)
+    assert not redmail_actions.picker_is_open()
+
+
+def test_several_numbers_or_name_select_and_accept():
+    redmail_actions._picker_open = True
+    redmail_actions._picker_queue.clear()
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select, patch(
+        FORM + "_redmail_picker_accept", return_value=[{"name": "A", "email": "a@x"}]
+    ):
+        _form_phrase("первый и третий")
+    assert [c[1]["number"] for c in mock_select.call_args_list] == [1, 3]
+    redmail_actions._picker_open = True
+    with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}) as mock_select, patch(
+        FORM + "_redmail_picker_accept", return_value=[{"name": "A", "email": "a@x"}]
+    ):
+        _form_phrase("евгений")
+    mock_select.assert_called_once_with(query="евгений", checked=True)
     assert not redmail_actions.picker_is_open()
 
 
@@ -415,13 +475,13 @@ def test_second_ambiguous_surname_is_queued_and_opened_after_accept():
         reply = _form_phrase("участники будько шилкин шапошников")
         mock_set.assert_called_once_with(add_participants=["budko@example.com"])
         assert opens == ["шилкин"]  # книга открыта для первой фамилии, Будько добавлен молча
-        assert reply.spoken == "Шилкин: найдено несколько — выберите номер и скажите принять"
+        assert reply.spoken == "Шилкин: найдено 2, выберите номер"
         with patch(FORM + "_redmail_picker_select", return_value={"touched": 1}), patch(
             FORM + "_redmail_picker_accept", return_value=[shilkins[1]]
         ):
             reply = _form_phrase("второй принять")
         assert opens == ["шилкин", "шапошников"]  # после «принять» открылась книга для следующей фамилии
-        assert reply.spoken == "Шапошников: найдено несколько — выберите номер и скажите принять"
+        assert reply.spoken == "Шапошников: найдено 2, выберите номер"
         assert redmail_actions.picker_is_open()
     redmail_actions._picker_open = False
 
@@ -623,14 +683,51 @@ def test_dialog_skips_fields_named_in_command():
     focus.assert_called_once_with("duration")
 
 
-def test_answer_without_field_word_goes_to_current_question_and_stays_there():
-    """Ответ можно повторить, чтобы исправить; к следующему — по «дальше»."""
+def test_unambiguous_answer_moves_to_next_question_after_pause():
+    """Однозначный ответ — пауза и следующий вопрос, без «дальше»."""
     _open_dialog("")
     with patch(FORM + "_redmail_event_form_set") as mock_set:
-        reply, _focus = _dialog_phrase("планёрка отдела")
+        reply, focus = _dialog_phrase("планёрка отдела")
     assert reply.handled and not reply.finished
     mock_set.assert_called_once_with(subject="планёрка отдела")
-    assert redmail_actions._dialog.field == "subject"
+    assert reply.spoken == "На какой день?" and reply.question and reply.delay == redmail_actions.ADVANCE_DELAY_SECONDS
+    focus.assert_called_once_with("date")
+    assert redmail_actions._dialog.field == "date"
+
+
+def test_date_with_time_skips_time_question():
+    _open_dialog("планёрка")
+    with patch(FORM + "_redmail_event_form_set"):
+        reply, _focus = _dialog_phrase("завтра в десять")
+    assert reply.spoken == "Сколько длится встреча?"
+
+
+def test_recurrence_question_and_answer():
+    _open_dialog("планёрка на 15 сентября в восемь тридцать")
+    with patch(FORM + "_redmail_event_form_set"):
+        reply, _focus = _dialog_phrase("час")
+    assert reply.spoken.startswith("Как повторять?")
+    with patch(FORM + "_redmail_event_form_set") as mock_set:
+        reply, focus = _dialog_phrase("каждую неделю")
+    mock_set.assert_called_once_with(recurrence="weekly")
+    assert reply.spoken.startswith("В какой календарь?")
+    focus.assert_called_once_with("calendar")
+
+
+def test_participants_and_description_wait_for_next():
+    _open_dialog("", calendars=[])
+    redmail_actions._dialog.index = redmail_actions._dialog.steps.index("participants")
+    with patch(FORM + "_redmail_find_contacts", side_effect=_fake_find_contacts), patch(FORM + "_redmail_event_form_set"):
+        reply, _focus = _dialog_phrase("будько")
+    assert reply.spoken is None and redmail_actions._dialog.field == "participants"
+    redmail_actions._dialog.index = redmail_actions._dialog.steps.index("description")
+    with patch(FORM + "_redmail_event_form_set") as mock_set:
+        _dialog_phrase("обсудим план")
+        reply, _focus = _dialog_phrase("и бюджет")
+    assert mock_set.call_args_list[-1][1] == {"description": "обсудим план и бюджет"}
+    assert reply.spoken is None and redmail_actions._dialog.field == "description"
+    reply, _focus = _dialog_phrase("дальше")
+    assert reply.spoken == "Всё заполнено. Сохранить встречу?"
 
 
 def test_next_and_back_move_between_questions():
@@ -655,17 +752,19 @@ def test_date_answer_is_parsed_like_field_phrase():
 
 def test_calendar_question_lists_calendars_and_answer_selects_one():
     _open_dialog("планёрка на 15 сентября в восемь тридцать")
+    _dialog_phrase("дальше")
     reply, focus = _dialog_phrase("дальше")
     assert reply.spoken == "В какой календарь? 1 — Мои встречи, 2 — CalDAV, 3 — Exchange: me@example.com"
     focus.assert_called_once_with("calendar")
     with patch(FORM + "_redmail_event_form_set", return_value={"calendar": "Exchange: me@example.com"}) as mock_set:
         reply, _focus = _dialog_phrase("эксчейндж")
     mock_set.assert_called_once_with(calendar="эксчейндж")
-    assert reply.spoken == "Календарь Exchange: me@example.com"
+    assert reply.spoken == "Календарь Exchange: me@example.com. Кого пригласить? Когда закончите, скажите дальше"
 
 
 def test_calendar_question_is_skipped_when_only_one_calendar():
     _open_dialog("планёрка на 15 сентября в восемь тридцать", calendars=CALENDARS[:1])
+    _dialog_phrase("дальше")
     reply, _focus = _dialog_phrase("дальше")
     assert reply.spoken.startswith("Кого пригласить?")
 
@@ -686,7 +785,7 @@ def test_unknown_calendar_speaks_what_exists():
 
 def test_final_question_yes_saves_and_no_leaves_form_open():
     _open_dialog("", calendars=[])
-    for _ in range(6):  # тема, день, время, длительность, участники, место
+    for _ in range(8):  # тема, день, время, длительность, повтор, участники, место, описание
         reply, _focus = _dialog_phrase("дальше")
     assert reply.spoken == "Всё заполнено. Сохранить встречу?"
     with patch(FORM + "_redmail_event_form_save") as mock_save:
@@ -697,7 +796,7 @@ def test_final_question_yes_saves_and_no_leaves_form_open():
 
 def test_final_question_no_ends_dialog_but_keeps_form():
     _open_dialog("", calendars=[])
-    for _ in range(6):
+    for _ in range(8):
         _dialog_phrase("дальше")
     with patch(FORM + "_redmail_event_form_save") as mock_save:
         reply, _focus = _dialog_phrase("нет")
@@ -713,13 +812,21 @@ def test_field_words_still_work_during_dialog_without_moving_question():
     assert redmail_actions._dialog.field == "subject"
 
 
-def test_edit_command_does_not_start_dialog():
-    with patch(FORM + "_redmail_find_events", return_value=[_event(uid="uid-7")]), patch(
-        FORM + "_redmail_event_form_open"
-    ), patch(FORM + "date_cls") as mock_date:
+def test_edit_recurring_event_opens_the_day_and_asks_fields():
+    events = [dict(_event(uid="daily", summary="Оперативка", start="2026-09-10T00:30:00+00:00"), recurring=True)]
+    with patch(FORM + "_redmail_find_events", return_value=events), patch(FORM + "date_cls") as mock_date:
         mock_date.today.return_value = TODAY
-        session = redmail_actions.redmail_event_form({"remainder": "планёрка", "edit": True})
-    assert session.question is None and not redmail_actions.dialog_is_active()
+        session = redmail_actions.redmail_event_form({"remainder": "оперативка", "edit": True})
+    assert session.question.endswith("Только этот день или всю серию?")
+    with patch(FORM + "_redmail_event_form_open") as mock_open, patch(FORM + "_redmail_list_calendars", return_value=[]), \
+            patch(FORM + "_redmail_event_form_focus"):
+        reply = _form_phrase("всю серию")
+    mock_open.assert_called_once_with(uid="daily", occurrence_start="2026-09-10T00:30:00+00:00", scope="all")
+    assert reply.spoken.endswith("Какая тема встречи?")
+    reply, _focus = _dialog_phrase("дальше")
+    assert reply.spoken == "На какой день?"
+    redmail_actions._dialog.index = len(redmail_actions._dialog.steps)
+    assert redmail_actions._dialog_question() == "Сохранить изменения?"
 
 
 def test_after_timeout_only_next_or_back_resume_dialog_from_idle():
@@ -731,7 +838,7 @@ def test_after_timeout_only_next_or_back_resume_dialog_from_idle():
 def test_yes_inside_long_phrase_does_not_save():
     """Сохранение встречи Exchange рассылает приглашения — «да» из разговора не в счёт."""
     _open_dialog("", calendars=[])
-    for _ in range(6):
+    for _ in range(8):
         _dialog_phrase("дальше")
     with patch(FORM + "_redmail_event_form_save") as mock_save, patch(FORM + "_redmail_event_form_set"):
         reply, _focus = _dialog_phrase("да я тебе потом перезвоню насчёт отчёта")

@@ -173,6 +173,9 @@ class Assistant:
             log.info("В режиме заполнения не поле: %r", text)
             return True
         log.info("Поле формы: %r%s", text, f" -> {reply.spoken}" if reply.spoken else "")
+        if reply.delay:
+            # Однозначный ответ принят — короткая пауза и следующий вопрос.
+            time.sleep(reply.delay)
         if reply.spoken:
             # Вопрос без записи и без синтеза лучше промолчать, чем сказать
             # «Не удалось выполнить команду»: поле и так подсвечено в окне.
@@ -230,7 +233,7 @@ class Assistant:
                             wake_word=self.config.wake_word,
                             fuzzy_threshold=self.config.wake_word_fuzzy_threshold,
                             words=self.config.event_form,
-                        ) and redmail_actions.form_is_open():
+                        ) and (redmail_actions.event_dialog_is_active() or redmail_actions.form_is_open()):
                             log.info("Окно встречи открыто — возвращаюсь в режим заполнения по фразе %r", final)
                             self.recognizer.reset()
                             if self._on_form_phrase(final):
