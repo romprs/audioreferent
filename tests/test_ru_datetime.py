@@ -39,10 +39,11 @@ def test_absolute_date_ordinal_genitive():
     assert (subject, on_date) == ("тест", date(2026, 9, 15))
 
 
-def test_date_without_year_is_always_current_year():
-    # договорённость: год не назван -> всегда текущий, даже если дата уже прошла
-    assert ru_datetime.parse_date("1 января", today=TODAY) == date(2026, 1, 1)
+def test_date_without_year_looks_ahead():
+    # год не назван -> ближайшая такая дата вперёд: прошедшая — в следующем году
+    assert ru_datetime.parse_date("1 января", today=TODAY) == date(2027, 1, 1)
     assert ru_datetime.parse_date("10 декабря", today=TODAY) == date(2026, 12, 10)
+    assert ru_datetime.parse_date("8 сентября", today=TODAY) == date(2026, 9, 8)  # сегодня — не прошла
 
 
 def test_weekday_is_next_such_day_strictly_after_today():
@@ -150,3 +151,27 @@ def test_extract_date_only_strips_trailing_na():
     assert subject == "совещание"
     assert on_date == date(2026, 9, 10)
     assert on_time is None
+
+
+def test_relative_day_adjectives():
+    # TODAY = вторник 8 сентября
+    assert ru_datetime.extract("завтрашнюю планёрку", today=TODAY) == ("планёрку", date(2026, 9, 9), None)
+    assert ru_datetime.parse_date("сегодняшнее совещание", today=TODAY) == date(2026, 9, 8)
+    assert ru_datetime.parse_date("послезавтрашний отчёт", today=TODAY) == date(2026, 9, 10)
+
+
+def test_day_of_month_without_month_looks_ahead():
+    assert ru_datetime.parse_date("на двадцатое", today=TODAY) == date(2026, 9, 20)
+    assert ru_datetime.extract("двадцать пятого в десять", today=TODAY) == ("", date(2026, 9, 25), (10, 0))
+    assert ru_datetime.parse_date("первого", today=TODAY) == date(2026, 10, 1)  # 1 сентября прошло
+    assert ru_datetime.parse_date("восьмое", today=TODAY) == date(2026, 9, 8)  # сегодня
+
+
+def test_part_of_day_after_time():
+    assert ru_datetime.parse_time("в девять вечера") == (21, 0)
+    assert ru_datetime.parse_time("в два дня") == (14, 0)
+    assert ru_datetime.parse_time("в одиннадцать дня") == (11, 0)
+    assert ru_datetime.parse_time("в восемь утра") == (8, 0)
+    assert ru_datetime.parse_time("в двенадцать ночи") == (0, 0)
+    assert ru_datetime.extract("завтра в 9 вечера", today=TODAY) == ("", date(2026, 9, 9), (21, 0))
+

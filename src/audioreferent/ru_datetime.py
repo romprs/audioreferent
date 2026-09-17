@@ -72,6 +72,13 @@ _DAY_ORDINALS.update(
 _DAY_ORDINALS_BY_LENGTH = sorted(_DAY_ORDINALS.items(), key=lambda kv: -len(kv[0].split()))
 
 _RELATIVE_DAYS = {"послезавтра": 2, "завтра": 1, "сегодня": 0}
+# «перенеси завтрашнюю планёрку», «отмени сегодняшнее совещание»
+_RELATIVE_DAY_ADJECTIVES = (("послезавтрашн", 2), ("завтрашн", 1), ("сегодняшн", 0))
+# Часть суток после времени: «в девять вечера» — 21:00, «в два дня» — 14:00.
+_EVENING_WORDS = ("вечера", "вечером")
+_AFTERNOON_WORDS = ("дня", "днём", "днем")
+_MORNING_WORDS = ("утра", "утром")
+_NIGHT_WORDS = ("ночи", "ночью")
 
 # Дни недели во всех падежных формах, которые встречаются после "в"/"на"/
 # "следующий": понедельник/понедельника, среда/среду и т.п.
@@ -121,10 +128,30 @@ def _number_or_digit(words: list[str], start: int) -> tuple[int | None, int]:
     return _number_from_words(words, start)
 
 
-def _year_for(today: date_cls, month: int, day: int) -> int:  # noqa: ARG001
-    """Год не назван — всегда текущий (так договорились: "дата — всегда
-    текущий год"). Перенос "в прошлое" отсечёт уже redmail при сохранении."""
-    return today.year
+def _year_for(today: date_cls, month: int, day: int) -> int:
+    """Год не назван — смотрим вперёд: дата, которая в этом году уже прошла,
+    — это следующий год («первого января», сказанное в сентябре)."""
+    try:
+        return today.year + 1 if date_cls(today.year, month, day) < today else today.year
+    except ValueError:
+        return today.year
+
+
+def _month_day_ahead(today: date_cls, day: int) -> date_cls | None:
+    """Число без месяца («на двадцатое») — ближайшее такое число, начиная с
+    сегодняшнего: в этом месяце, если ещё не прошло, иначе в следующем."""
+    year, month = today.year, today.month
+    for _ in range(3):  # 31-го может не быть в следующем месяце
+        try:
+            candidate = date_cls(year, month, day)
+        except ValueError:
+            candidate = None
+        if candidate is not None and candidate >= today:
+            return candidate
+        month += 1
+        if month > 12:
+            year, month = year + 1, 1
+    return None
 
 
 def _match_date_tokens(
@@ -137,6 +164,9 @@ def _match_date_tokens(
     for i, word in enumerate(words):
         if word in _RELATIVE_DAYS:
             return today + timedelta(days=_RELATIVE_DAYS[word]), (i, i + 1)
+        for stem, days in _RELATIVE_DAY_ADJECTIVES:
+            if word.startswith(stem):
+                return today + timedelta(days=days), (i, i + 1)
 
     # "через неделю" — ровно через семь дней
     for i in range(n - 1):
@@ -190,7 +220,34 @@ def _match_date_tokens(
                 except ValueError:
                     return None, None
 
+    # Число без месяца: «на двадцатое», «двадцать пятого» — ближайшее вперёд.
+    for phrase, day in _DAY_ORDINALS_BY_LENGTH:
+        phrase_words = phrase.split()
+        span = len(phrase_words)
+        for i in range(n - span + 1):
+            if words[i : i + span] == phrase_words:
+                value = _month_day_ahead(today, day)
+                if value is None:
+                    return None, None
+                start = i - 1 if i > 0 and words[i - 1] in ("на", "в", "до") else i
+                return value, (start, i + span)
+
     return None, None
+
+
+def _apply_part_of_day(hour: int, minute: int, words: list[str], end: int) -> tuple[tuple[int, int], int]:
+    """Слово части суток сразу после времени: переводит час и съедается."""
+    if end < len(words):
+        word = words[end]
+        if word in _EVENING_WORDS and hour < 12:
+            return (hour + 12, minute), end + 1
+        if word in _AFTERNOON_WORDS and hour < 12:
+            return ((hour + 12) if hour <= 6 else hour, minute), end + 1
+        if word in _NIGHT_WORDS:
+            return (0 if hour == 12 else hour, minute), end + 1
+        if word in _MORNING_WORDS:
+            return (0 if hour == 12 else hour, minute), end + 1
+    return (hour, minute), end
 
 
 def _match_time_tokens(words: list[str]) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
@@ -229,7 +286,8 @@ def _match_time_tokens(words: list[str]) -> tuple[tuple[int, int] | None, tuple[
         else:
             minute = 0
             end = nxt
-        return (hour, minute), (i, end)
+        value, end = _apply_part_of_day(hour, minute, words, end)
+        return value, (i, end)
 
     return None, None
 
