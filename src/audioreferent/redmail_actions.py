@@ -123,10 +123,17 @@ def redmail_focus(args: dict[str, Any]) -> None:
     """"открой почту": окно redmail на передний план, а если почта не
     запущена — запустить её (для человека "открой почту" значит именно
     это, а не "покажи уже открытое окно")."""
+    section = args.get("section")
     try:
-        _redmail_focus()
-    except RedmailNotRunning:
+        if section:
+            _redmail_focus(section)  # «открой календарь», «открой контакты»
+        else:
+            _redmail_focus()
+    except RedmailNotRunning as exc:
         _launch_redmail(args)
+        if section and section != "mail":
+            # Почта откроется на разделе почты — календарь покажем по повтору.
+            raise ActionError("Запускаю почту, повторите команду") from exc
     except RedmailError as exc:
         raise ActionError(str(exc)) from exc
 
@@ -556,6 +563,7 @@ def _stop_dialog() -> None:
     global _dialog, _event_dialog
     _dialog = None
     _event_dialog = None
+    _pending_removal.clear()
 
 
 def _answered(field_name: str, spoken: str | None = None) -> FormReply:
@@ -647,6 +655,11 @@ def handle_form_phrase(
         reply = handle_picker_phrase(tokens)
         if reply is not None:
             return reply
+    if _pending_removal:
+        return _removal_choice(tokens)
+    removed = _remove_participants_command(tokens)
+    if removed is not None:
+        return removed
     listed = _list_participants_command(tokens)
     if listed is not None:
         return listed
@@ -1132,6 +1145,96 @@ def _list_participants_command(tokens: list[str]) -> FormReply | None:
     return FormReply(handled=True, spoken=f"Участники — {count}: {names}" if len(emails) > 1 else f"Участник: {names}")
 
 
+# --- удаление участников голосом -------------------------------------------
+#
+# «удали Смирнова», «убери Шилкина Евгения», «исключи второго», «удали всех
+# участников». Ищем только среди тех, кто уже в окне встречи: по словам имени
+# с учётом падежа (как поиск в адресной книге) и по адресу. Несколько
+# совпадений — «Найдено 2: 1 — …, 2 — … Кого убрать? Назовите номер».
+
+_REMOVE_VERBS = ("удали", "удалить", "убери", "убрать", "исключи", "исключить")
+_REMOVE_FILLERS = (
+    "участника", "участников", "участники", "участник", "участницу", "из", "списка", "приглашённых",
+    "приглашенных", "и", "пожалуйста",
+)
+_REMOVE_ALL = ("всех", "все")
+
+#: Кандидаты на удаление после неоднозначного «удали …»: [{"email", "name"}].
+_pending_removal: list[dict] = []
+
+
+def _form_participants() -> list[str]:
+    state = _redmail_event_form_state()
+    return [e for e in state.get("participants", []) if isinstance(e, str)]
+
+
+def _participant_matches(query_words: list[str], email: str) -> bool:
+    name_words = _name_for(email).split() + [email.split("@", 1)[0]]
+    return all(any(_word_matches(q, w) for w in name_words) for q in query_words)
+
+
+def _remove_emails(emails: list[str], removed: list[str]) -> FormReply:
+    gone = {e.casefold() for e in removed}
+    _redmail_event_form_set(participants=[e for e in emails if e.casefold() not in gone])
+    names = ", ".join(_name_for(e) for e in removed)
+    return FormReply(handled=True, spoken=f"Убрала: {names}", spoken_fallback="Участник не найден")
+
+
+def _remove_participants_command(tokens: list[str]) -> FormReply | None:
+    global _pending_removal
+    if tokens[0] not in _REMOVE_VERBS:
+        return None
+    words = [t for t in tokens[1:] if t not in _REMOVE_FILLERS]
+    try:
+        emails = _form_participants()
+        if not emails:
+            return FormReply(handled=True, spoken="Участников пока нет")
+        if not words:
+            return FormReply(handled=True, spoken="Кого убрать? Назовите фамилию", question=True)
+        if any(w in _REMOVE_ALL for w in words):
+            _redmail_event_form_set(participants=[])
+            return FormReply(handled=True, spoken="Все участники убраны")
+        numbers = _picker_numbers(words)
+        if numbers and len(numbers) == len(words):
+            # «удали второго» — номер как в «назови участников»
+            chosen = [emails[n - 1] for n in numbers if 1 <= n <= len(emails)]
+            if not chosen:
+                return FormReply(handled=True, spoken="Такого номера нет")
+            return _remove_emails(emails, chosen)
+        matches = [e for e in emails if _participant_matches(words, e)]
+        who = " ".join(words).capitalize()
+        if not matches:
+            return FormReply(handled=True, spoken=f"{who} среди участников нет", spoken_fallback="Участник не найден")
+        if len(matches) == 1:
+            return _remove_emails(emails, matches)
+        _pending_removal = [{"email": e, "name": _name_for(e)} for e in matches]
+        listed = ", ".join(f"{i} — {c['name']}" for i, c in enumerate(_pending_removal, 1))
+        return FormReply(handled=True, spoken=f"Найдено {len(matches)}: {listed}. Кого убрать? Назовите номер", question=True)
+    except RedmailError as exc:
+        if _form_closed(exc):
+            return FormReply(handled=True, finished=True)
+        return FormReply(handled=True, spoken="Не удалось выполнить команду")
+
+
+def _removal_choice(tokens: list[str]) -> FormReply:
+    """Ответ на «Кого убрать? Назовите номер»."""
+    global _pending_removal
+    if tokens[0] in _PICKER_CANCEL or tokens[0] in _DIALOG_NO:
+        _pending_removal = []
+        return FormReply(handled=True, spoken="Хорошо")
+    numbers = _picker_numbers([t for t in tokens if t not in ("номер", "и")])
+    chosen = [_pending_removal[n - 1]["email"] for n in numbers if 1 <= n <= len(_pending_removal)]
+    if not chosen:
+        return FormReply(handled=True, spoken="Не разобрала, повторите номер", question=True)
+    _pending_removal = []
+    try:
+        return _remove_emails(_form_participants(), chosen)
+    except RedmailError as exc:
+        if _form_closed(exc):
+            return FormReply(handled=True, finished=True)
+        return FormReply(handled=True, spoken="Не удалось выполнить команду")
+
+
 def _open_picker_command(tokens: list[str]) -> FormReply | None:
     """«открой адресную книгу [фильтр]» в режиме заполнения."""
     global _picker_open
@@ -1164,6 +1267,8 @@ def looks_like_form_phrase(text: str, *, wake_word: str, fuzzy_threshold: int, w
     if _event_dialog is not None:
         # Идёт разговор отмены или правки: номер, «да»/«нет», «этот день»/«серию».
         return bool(_picker_numbers(tokens)) or tokens[0] in _DIALOG_YES + _DIALOG_NO + _SCOPE_ONE_WORDS + _SCOPE_ALL_WORDS
+    if _pending_removal or tokens[0] in _REMOVE_VERBS:
+        return True
     joined = " ".join(tokens)
     if any(joined.startswith(p) for p in _LIST_PHRASES + _PICKER_OPEN_PHRASES):
         return True

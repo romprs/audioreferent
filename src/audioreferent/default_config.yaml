@@ -219,6 +219,20 @@ commands:
     action: redmail_focus
     args:
       candidates: ["redmail"]
+      section: mail
+
+  # Разделы почты: окно на передний план и нужная вкладка.
+  - phrases: ["открой календарь", "открыть календарь", "покажи календарь", "перейди в календарь"]
+    action: redmail_focus
+    args:
+      candidates: ["redmail"]
+      section: calendar
+
+  - phrases: ["открой контакты", "открыть контакты", "покажи контакты", "открой адресную книгу", "покажи адресную книгу"]
+    action: redmail_focus
+    args:
+      candidates: ["redmail"]
+      section: contacts
 
   # "вика создай встречу [планёрка] [на 15 сентября] [в восемь тридцать]"
   # -> в redmail открывается окно новой встречи, названное из первой фразы

@@ -861,3 +861,71 @@ def test_subject_is_matched_by_word_stems():
         mock_date.today.return_value = TODAY
         found = redmail_actions._search_events("планерку")
     assert [e["uid"] for e in found] == ["p"]
+
+
+# --- удаление участников -----------------------------------------------------
+
+PARTICIPANTS = ["smirnov.i@x.ru", "smirnova.a@x.ru", "budko@example.com"]
+NAMES = {"smirnov.i@x.ru": "Смирнов Иван", "smirnova.a@x.ru": "Смирнова Анна", "budko@example.com": "Будько Олег"}
+
+
+def _remove(phrase, participants=PARTICIPANTS):
+    redmail_actions._known_names.update(NAMES)
+    with patch(FORM + "_redmail_event_form_state", return_value={"participants": list(participants)}), patch(
+        FORM + "_redmail_event_form_set"
+    ) as mock_set:
+        reply = _form_phrase(phrase)
+    return reply, mock_set
+
+
+def test_remove_single_participant_by_surname_in_any_case():
+    reply, mock_set = _remove("удали будько")
+    mock_set.assert_called_once_with(participants=["smirnov.i@x.ru", "smirnova.a@x.ru"])
+    assert reply.spoken == "Убрала: Будько Олег"
+
+
+def test_remove_ambiguous_asks_number_then_removes():
+    reply, mock_set = _remove("убери смирнова")  # Смирнов и Смирнова — оба подходят
+    mock_set.assert_not_called()
+    assert reply.spoken == "Найдено 2: 1 — Смирнов Иван, 2 — Смирнова Анна. Кого убрать? Назовите номер"
+    assert redmail_actions.looks_like_form_phrase("второй", wake_word="вика", fuzzy_threshold=1)
+    reply, mock_set = _remove("сидоров")
+    assert reply.spoken == "Не разобрала, повторите номер"
+    reply, mock_set = _remove("второй")
+    mock_set.assert_called_once_with(participants=["smirnov.i@x.ru", "budko@example.com"])
+    assert reply.spoken == "Убрала: Смирнова Анна" and not redmail_actions._pending_removal
+
+
+def test_remove_by_first_and_last_name_narrows_to_one():
+    reply, mock_set = _remove("удали смирнова ивана")
+    mock_set.assert_called_once_with(participants=["smirnova.a@x.ru", "budko@example.com"])
+
+
+def test_remove_by_number_all_and_missing():
+    reply, mock_set = _remove("исключи третьего участника")
+    mock_set.assert_called_once_with(participants=["smirnov.i@x.ru", "smirnova.a@x.ru"])
+    reply, mock_set = _remove("удали всех участников")
+    mock_set.assert_called_once_with(participants=[])
+    reply, mock_set = _remove("удали петрова")
+    mock_set.assert_not_called()
+    assert reply.spoken == "Петрова среди участников нет"
+    reply, mock_set = _remove("удали петрова", participants=[])
+    assert reply.spoken == "Участников пока нет"
+
+
+def test_open_calendar_and_contacts_sections():
+    from audioreferent.commands import CommandRegistry
+    from audioreferent.config import Config, _read_default_config
+
+    registry = CommandRegistry(Config.from_dict(_read_default_config()).commands)
+    match = registry.match("вика открой календарь")
+    assert match.spec.action == "redmail_focus" and match.spec.args["section"] == "calendar"
+    assert registry.match("вика покажи контакты").spec.args["section"] == "contacts"
+    with patch(FORM + "_redmail_focus") as mock_focus:
+        redmail_actions.redmail_focus(dict(match.spec.args))
+    mock_focus.assert_called_once_with("calendar")
+    with patch(FORM + "_redmail_focus", side_effect=RedmailNotRunning("нет")), patch(FORM + "launch_app") as mock_launch:
+        with pytest.raises(ActionError, match="повторите"):
+            redmail_actions.redmail_focus({"candidates": ["redmail"], "section": "calendar"})
+    mock_launch.assert_called_once()
+

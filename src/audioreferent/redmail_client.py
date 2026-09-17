@@ -90,8 +90,9 @@ def send_request(action: str, args: dict[str, Any] | None = None) -> dict:
     return response
 
 
-def focus() -> None:
-    send_request("focus")
+def focus(section: str | None = None) -> None:
+    """Окно почты на передний план; section — mail, calendar или contacts."""
+    send_request("focus", {"section": section} if section else {})
 
 
 def compose_email(*, to: str, subject: str = "", body: str = "", cc: str = "", bcc: str = "") -> None:
