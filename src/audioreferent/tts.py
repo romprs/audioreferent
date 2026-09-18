@@ -26,7 +26,10 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 import threading
+import time
+import wave
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -96,7 +99,18 @@ def available_voices(voices_dir: str | None = None) -> list[str]:
 
 class PiperEngine:
     """Синтез PCM16 mono вызовом piper; результаты кешируются по тексту,
-    фиксированные фразы помощника синтезируются один раз (см. warm_up)."""
+    фиксированные фразы помощника синтезируются один раз (см. warm_up).
+
+    piper держится ЗАПУЩЕННЫМ (режим --json-input: строка JSON с текстом и
+    именем файла на каждую фразу): запуск процесса заново стоил ~0,4 с
+    только на загрузку модели — на слабом процессоре это была основная
+    задержка ответа (0,6 с против 0,2 с на фразу). Если долгоживущий
+    процесс почему-то не поднялся или умер, синтез падает обратно на
+    разовый запуск, так что ответ звучит в любом случае."""
+
+    #: Сколько ждать готовности файла с ответом, прежде чем считать, что
+    #: процесс завис (синтез фразы — доли секунды, запас большой).
+    _RESPONSE_TIMEOUT = 20.0
 
     def __init__(self, binary: str, voice_path: str):
         self.binary = binary
@@ -104,6 +118,9 @@ class PiperEngine:
         self.sample_rate = self._read_sample_rate(voice_path)
         self._lock = threading.Lock()
         self._cache: dict[str, bytes] = {}
+        self._process: subprocess.Popen | None = None
+        self._work_dir: tempfile.TemporaryDirectory | None = None
+        self._counter = 0
 
     @staticmethod
     def _read_sample_rate(voice_path: str) -> int:
@@ -113,22 +130,108 @@ class PiperEngine:
         except (OSError, ValueError, KeyError, TypeError):
             return 22050  # частота голосов medium у Piper
 
+    # -- долгоживущий процесс ---------------------------------------------
+
+    def _ensure_process(self) -> subprocess.Popen | None:
+        """Запущенный piper в режиме --json-input (перезапускается, если
+        умер). None — поднять не удалось, синтез пойдёт разовым запуском."""
+        if self._process is not None and self._process.poll() is None:
+            return self._process
+        self._close_process()
+        try:
+            self._work_dir = tempfile.TemporaryDirectory(prefix="audioreferent-piper-")
+            self._process = subprocess.Popen(
+                [self.binary, "--model", self.voice_path, "--json-input", "--sentence-silence", "0.15"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            log.warning("Не удалось запустить piper фоном (%s) — синтез разовыми запусками", exc)
+            self._close_process()
+            return None
+        return self._process
+
+    def _close_process(self) -> None:
+        process, self._process = self._process, None
+        work_dir, self._work_dir = self._work_dir, None
+        if process is not None:
+            try:
+                if process.stdin:
+                    process.stdin.close()
+                process.terminate()
+                process.wait(timeout=2)
+            except Exception:  # noqa: BLE001 — на закрытии уже неважно, почему
+                process.kill()
+        if work_dir is not None:
+            work_dir.cleanup()
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_process()
+
+    def _synthesize_via_process(self, text: str) -> bytes | None:
+        process = self._ensure_process()
+        if process is None or process.stdin is None or self._work_dir is None:
+            return None
+        self._counter += 1
+        path = Path(self._work_dir.name) / f"{self._counter}.wav"
+        try:
+            process.stdin.write((json.dumps({"text": text, "output_file": str(path)}, ensure_ascii=False) + "\n").encode("utf-8"))
+            process.stdin.flush()
+        except OSError as exc:
+            log.warning("piper не принял фразу (%s) — перезапускаю", exc)
+            self._close_process()
+            return None
+        deadline = time.monotonic() + self._RESPONSE_TIMEOUT
+        size = -1
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                log.warning("piper завершился во время синтеза — перезапущу на следующей фразе")
+                self._close_process()
+                return None
+            if path.exists():
+                # Файл дописывается — ждём, пока размер перестанет расти.
+                current = path.stat().st_size
+                if current > 44 and current == size:
+                    break
+                size = current
+            time.sleep(0.02)
+        else:
+            log.warning("piper не ответил за %.0f с — перезапускаю", self._RESPONSE_TIMEOUT)
+            self._close_process()
+            return None
+        try:
+            with wave.open(str(path), "rb") as wav:
+                pcm = wav.readframes(wav.getnframes())
+        except (OSError, wave.Error) as exc:
+            log.warning("Не удалось прочитать ответ piper (%s)", exc)
+            pcm = None
+        finally:
+            path.unlink(missing_ok=True)
+        return pcm or None
+
+    def _synthesize_once(self, text: str) -> bytes:
+        """Разовый запуск piper — запасной путь (модель грузится заново)."""
+        result = subprocess.run(
+            [self.binary, "--model", self.voice_path, "--output-raw", "--sentence-silence", "0.15"],
+            input=text.encode("utf-8"),
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        if not result.stdout:
+            raise RuntimeError(f"piper не вернул аудио: {result.stderr.decode('utf-8', 'replace')[-200:]}")
+        return result.stdout
+
     def synthesize(self, text: str) -> bytes:
         """PCM16 mono (self.sample_rate). Исключение — если piper упал."""
         cached = self._cache.get(text)
         if cached is not None:
             return cached
         with self._lock:
-            result = subprocess.run(
-                [self.binary, "--model", self.voice_path, "--output-raw", "--sentence-silence", "0.15"],
-                input=text.encode("utf-8"),
-                capture_output=True,
-                check=True,
-                timeout=30,
-            )
-        pcm = result.stdout
-        if not pcm:
-            raise RuntimeError(f"piper не вернул аудио: {result.stderr.decode('utf-8', 'replace')[-200:]}")
+            pcm = self._synthesize_via_process(text) or self._synthesize_once(text)
         self._cache[text] = pcm
         return pcm
 

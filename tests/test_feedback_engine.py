@@ -1,5 +1,6 @@
 import json
 import sys
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -102,6 +103,64 @@ def test_resolve_voice_and_available_voices(tmp_path):
     assert tts.resolve_voice("ru_RU-irina-medium", str(tmp_path)).endswith("ru_RU-irina-medium.onnx")
     assert tts.resolve_voice("ru_RU-ruslan-medium", str(tmp_path)) is None
     assert tts.available_voices(str(tmp_path)) == ["ru_RU-denis-medium", "ru_RU-irina-medium"]
+
+
+def test_piper_engine_uses_a_long_lived_process(tmp_path):
+    """Фраза уходит строкой JSON в уже запущенный piper, ответ читается из
+    файла: перезапуск процесса стоил бы ~0,4 с на загрузку модели."""
+    voice = _voice(tmp_path)
+    engine = tts.PiperEngine("/usr/bin/piper", str(voice))
+    written: list[bytes] = []
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = SimpleNamespace(write=self._write, flush=lambda: None, close=lambda: None)
+            self.terminated = False
+
+        def _write(self, data: bytes) -> None:
+            written.append(data)
+            request = json.loads(data.decode("utf-8"))
+            path = Path(request["output_file"])
+            with wave.open(str(path), "wb") as wav:  # «синтезированный» ответ
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(22050)
+                wav.writeframes(b"\x01\x02" * 100)
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    process = FakeProcess()
+    with patch("audioreferent.tts.subprocess.Popen", return_value=process) as popen, patch(
+        "audioreferent.tts.subprocess.run"
+    ) as run:
+        assert engine.synthesize("Слушаю") == b"\x01\x02" * 100
+        assert engine.synthesize("Отменено") == b"\x01\x02" * 100
+        assert engine.synthesize("Слушаю") == b"\x01\x02" * 100  # из кеша
+    popen.assert_called_once()  # процесс один на все фразы
+    assert "--json-input" in popen.call_args[0][0]
+    run.assert_not_called()  # разовый запуск не понадобился
+    assert [json.loads(w.decode("utf-8"))["text"] for w in written] == ["Слушаю", "Отменено"]
+    engine.close()
+    assert process.terminated
+
+
+def test_piper_engine_falls_back_to_one_shot_when_process_fails(tmp_path):
+    voice = _voice(tmp_path)
+    engine = tts.PiperEngine("/usr/bin/piper", str(voice))
+    completed = SimpleNamespace(stdout=b"\x05\x06", stderr=b"")
+    with patch("audioreferent.tts.subprocess.Popen", side_effect=OSError("no exec")), patch(
+        "audioreferent.tts.subprocess.run", return_value=completed
+    ) as run:
+        assert engine.synthesize("Слушаю") == b"\x05\x06"
+    run.assert_called_once()
+    assert "--output-raw" in run.call_args[0][0]
 
 
 def test_piper_engine_runs_binary_with_output_raw(tmp_path):
