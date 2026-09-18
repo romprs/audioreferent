@@ -64,7 +64,9 @@ class SpeakListener:
             # Только владелец: напоминания — это темы встреч, чужим в сокете
             # делать нечего даже на общей машине.
             os.chmod(self._path, 0o600)
-            server.listen(4)
+            # Очередь с запасом: несколько напоминаний могут прийти подряд,
+            # а переполненная очередь даёт просящему EAGAIN вместо доставки.
+            server.listen(16)
             server.settimeout(0.5)
         except OSError as exc:
             log.warning("Канал помощника не поднят (%s): %s", self._path, exc)
