@@ -102,6 +102,8 @@ feedback:
   speech: false
 
 # Чем озвучивать ответы при feedback.speech: true.
+#   vosk       — синтез vosk-tts (одна модель ~1 ГБ, пять голосов, чище
+#                дикция; ударения в фамилиях правятся stress_dictionary).
 #   piper      — синтез Piper TTS (офлайн, один голос, любой текст, ~0,1 с
 #                на фразу; нужны программа piper и файлы голоса — RPM кладёт
 #                их в /opt/audioreferent/piper/ и /usr/share/audioreferent/piper/).
@@ -114,7 +116,22 @@ tts_engine: piper
 piper_binary_path: null
 # null = искать голоса в /usr/share/audioreferent/piper и ~/.local/share/audioreferent/piper
 piper_voices_dir: null
-# Голоса (файл <имя>.onnx + <имя>.onnx.json): ru_RU-irina-medium — женский,
+# Настройки движка vosk-tts (tts_engine: vosk). Одна модель — пять голосов
+# (vosk_tts_speaker: 0…4), скорость речи (1.0 — как записано, больше —
+# быстрее). Модель ищется в /usr/share/audioreferent/vosk-tts/ и
+# ~/.cache/vosk/, либо задайте путь явно.
+vosk_tts_model_path: null
+vosk_tts_speaker: 0
+vosk_tts_speech_rate: 1.0
+
+# Словарь ударений: «как слышно» -> «как произносить», знак «+» ставится
+# перед ударной гласной. Нужен для фамилий, где модель ошибается (у неё
+# свой внутренний словарь, и переучить его иначе нельзя). Применяется к
+# любому тексту ответа, регистр не важен. Работает с движком vosk-tts.
+stress_dictionary:
+  будько: будьк+о
+
+# Голоса Piper (файл <имя>.onnx + <имя>.onnx.json): ru_RU-irina-medium — женский,
 # голос RHVoice (лаборатория Tiflo RHVoice подтвердила 12.09.2026, что
 # дополнительного разрешения не требуется); ru_RU-denis-medium и
 # ru_RU-dmitri-medium — мужские, CC0.

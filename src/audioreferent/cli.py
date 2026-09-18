@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from . import actions, config
 from .commands import CommandRegistry
@@ -50,6 +51,32 @@ def _cmd_say(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pregen_phrases(args: argparse.Namespace) -> int:
+    """Заранее синтезировать все фиксированные фразы в кэш.
+
+    Синтез на слабой или загруженной машине стоит секунды, поэтому фразы
+    готовятся один раз: при сборке пакета (тогда каталог кладут в
+    /usr/share/audioreferent/tts-cache и на рабочей машине ничего не
+    считается вовсе) либо разово на самой машине."""
+    from . import feedback, phrase_cache
+
+    cfg = config.load_config()
+    if args.voice:
+        cfg.vosk_tts_speaker = int(args.voice)
+    feedback.configure(cfg, warm_up=False)
+    if feedback.engine_name() == "recordings":
+        print("Синтез недоступен — нечего готовить (проверьте tts_engine и модель)")
+        return 1
+    target = Path(args.out) if args.out else phrase_cache.cache_root()
+    done = 0
+    for text in feedback.spoken_phrases():
+        pcm = feedback.synthesize_to_cache(text, target)
+        done += 1 if pcm else 0
+        print(f"{'+' if pcm else '!'} {text}")
+    print(f"Готово: {done} фраз(ы) в {target}")
+    return 0 if done else 1
+
+
 def _cmd_test_command(args: argparse.Namespace) -> int:
     cfg = config.load_config()
     registry = CommandRegistry(cfg.commands)
@@ -89,6 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_say.add_argument("text")
     p_say.add_argument("--voice", default="", help="голос Piper, напр. ru_RU-denis-medium, ru_RU-irina-medium")
     p_say.set_defaults(func=_cmd_say)
+
+    p_pregen = subparsers.add_parser(
+        "pregen-phrases", help="заранее синтезировать фиксированные фразы в кэш (для сборки пакета)"
+    )
+    p_pregen.add_argument("--out", default="", help="каталог кэша (по умолчанию ~/.cache/audioreferent/tts)")
+    p_pregen.add_argument("--voice", default="", help="голос vosk-tts (0…4)")
+    p_pregen.set_defaults(func=_cmd_pregen_phrases)
 
     p_test = subparsers.add_parser("test-command", help="проверить сопоставление текста команде без аудио")
     p_test.add_argument("text")

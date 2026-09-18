@@ -112,6 +112,16 @@ class Config:
     piper_binary_path: str | None = None
     piper_voices_dir: str | None = None
     piper_voice: str = "ru_RU-irina-medium"
+    # vosk-tts: одна модель, пять голосов (0…4), скорость речи и словарь
+    # ударений «как слышно -> как произносить» (см. vosk_tts_engine.py).
+    vosk_tts_model_path: str | None = None
+    vosk_tts_speaker: int = 0
+    vosk_tts_speech_rate: float = 1.0
+    # Потоков onnxruntime на синтез (0 — на усмотрение библиотеки). На
+    # четырёхъядерной машине лучший результат дают два: больше — потоки
+    # отнимают ядра у распознавания (см. vosk_tts_engine.DEFAULT_THREADS).
+    vosk_tts_threads: int = 2
+    stress_dictionary: dict[str, str] = field(default_factory=dict)
     # Скорость отклика распознавания (см. recognizer.py / audio.py):
     # режим конца фразы Vosk (short/default/long), явная пауза тишины после
     # речи в секундах (null — по режиму) и размер аудиоблока в сэмплах
@@ -148,6 +158,11 @@ class Config:
             piper_binary_path=data.get("piper_binary_path"),
             piper_voices_dir=data.get("piper_voices_dir"),
             piper_voice=data.get("piper_voice", "ru_RU-irina-medium"),
+            vosk_tts_model_path=data.get("vosk_tts_model_path"),
+            vosk_tts_speaker=int(data.get("vosk_tts_speaker", 0)),
+            vosk_tts_speech_rate=float(data.get("vosk_tts_speech_rate", 1.0)),
+            vosk_tts_threads=int(data.get("vosk_tts_threads", 2)),
+            stress_dictionary={str(k): str(v) for k, v in (data.get("stress_dictionary") or {}).items()},
             recognition_endpointing=data.get("recognition_endpointing", "short"),
             recognition_end_silence_seconds=data.get("recognition_end_silence_seconds", 0.4),
             audio_block_samples=int(data.get("audio_block_samples", 4000)),
@@ -242,6 +257,11 @@ def save_config(cfg: Config) -> None:
         "piper_binary_path": cfg.piper_binary_path,
         "piper_voices_dir": cfg.piper_voices_dir,
         "piper_voice": cfg.piper_voice,
+        "vosk_tts_model_path": cfg.vosk_tts_model_path,
+        "vosk_tts_speaker": cfg.vosk_tts_speaker,
+        "vosk_tts_speech_rate": cfg.vosk_tts_speech_rate,
+        "vosk_tts_threads": cfg.vosk_tts_threads,
+        "stress_dictionary": dict(cfg.stress_dictionary),
         "recognition_endpointing": cfg.recognition_endpointing,
         "recognition_end_silence_seconds": cfg.recognition_end_silence_seconds,
         "audio_block_samples": cfg.audio_block_samples,

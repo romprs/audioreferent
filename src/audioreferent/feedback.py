@@ -110,7 +110,11 @@ def configure(cfg, *, warm_up: bool = True) -> None:
     вызовов (audioreferent say, кнопка «Проверить голос»)."""
     global _engine
     _engine = None
-    if getattr(cfg, "tts_engine", "recordings") != "piper":
+    engine = getattr(cfg, "tts_engine", "recordings")
+    if engine == "vosk":
+        _configure_vosk(cfg, warm_up=warm_up)
+        return
+    if engine != "piper":
         return
     from . import tts
 
@@ -135,8 +139,62 @@ def configure(cfg, *, warm_up: bool = True) -> None:
         _engine.warm_up(list(_PRERECORDED_PHRASES))
 
 
+def _configure_vosk(cfg, *, warm_up: bool = True) -> None:
+    """Движок vosk-tts: одна модель, пять голосов, словарь ударений."""
+    global _engine
+    from . import vosk_tts_engine
+
+    model_path = vosk_tts_engine.resolve_model_path(getattr(cfg, "vosk_tts_model_path", None))
+    if not model_path:
+        log.warning("Синтез vosk-tts включён, но модель не найдена — отвечаю записями")
+        return
+    if not vosk_tts_engine.available():
+        log.warning("Синтез vosk-tts включён, но пакет vosk-tts не установлен — отвечаю записями")
+        return
+    _engine = vosk_tts_engine.VoskTtsEngine(
+        model_path,
+        speaker=int(getattr(cfg, "vosk_tts_speaker", vosk_tts_engine.DEFAULT_SPEAKER)),
+        speech_rate=float(getattr(cfg, "vosk_tts_speech_rate", 1.0)),
+        stress=getattr(cfg, "stress_dictionary", None),
+        threads=int(getattr(cfg, "vosk_tts_threads", vosk_tts_engine.DEFAULT_THREADS)),
+    )
+    _engine.voice_name = f"vosk-tts, голос {_engine.speaker}"
+    if warm_up:
+        _engine.warm_up(list(_PRERECORDED_PHRASES))
+
+
 def engine_name() -> str:
-    return "piper" if _engine is not None else "recordings"
+    if _engine is None:
+        return "recordings"
+    return "vosk" if _engine.__class__.__name__ == "VoskTtsEngine" else "piper"
+
+
+def spoken_phrases() -> list[str]:
+    """Все фразы, которые помощник может произнести дословно (динамические
+    — с именами и фамилиями — сюда не входят, их не предсказать)."""
+    return list(_PRERECORDED_PHRASES)
+
+
+def synthesize_to_cache(text: str, target_dir) -> bytes | None:
+    """Синтезировать фразу и положить её в кэш по указанному пути — для
+    `audioreferent pregen-phrases` (сборка пакета). None — не вышло."""
+    from pathlib import Path
+
+    from . import phrase_cache
+
+    if _engine is None:
+        return None
+    try:
+        pcm = _engine.synthesize(text)
+    except Exception as exc:  # noqa: BLE001 — одна неудачная фраза не повод падать
+        log.warning("Не удалось синтезировать %r: %s", text, exc)
+        return None
+    cache = phrase_cache.PhraseCache(
+        engine_name(), str(getattr(_engine, "speaker", voice_name() or "")), getattr(_engine, "speech_rate", 1.0)
+    )
+    cache._dir = Path(target_dir) / engine_name() / str(getattr(_engine, "speaker", voice_name() or ""))
+    cache.put(text, pcm)
+    return pcm
 
 
 def voice_name() -> str | None:
