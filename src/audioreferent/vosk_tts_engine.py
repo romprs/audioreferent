@@ -22,6 +22,7 @@ import contextlib
 import logging
 import re
 import threading
+import time
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -168,6 +169,17 @@ class VoskTtsEngine:
         return pcm
 
     def warm_up(self, texts: Iterable[str]) -> threading.Thread:
+        """Подготовить движок к работе в фоне: сначала фразы (обычно они
+        уже в кэше и берутся мгновенно), затем — обязательно — загрузка
+        самой модели.
+
+        Модель грузится явно, даже когда все фразы нашлись в кэше: иначе
+        она загрузится в первый раз посреди разговора, на первой же живой
+        фразе с фамилией, и человек прождёт десятки секунд (замер на
+        загруженной рабочей станции — 70 с). Пусть лучше это время пройдёт
+        при старте сервиса, а дальше страницы уйдут в своп на общих
+        основаниях (memory_saver)."""
+
         def _run() -> None:
             for text in texts:
                 try:
@@ -176,6 +188,13 @@ class VoskTtsEngine:
                     log.warning("Не удалось заранее синтезировать %r: %s", text, exc)
                     return
             log.info("Фразы для голосового ответа подготовлены (%d)", len(self._cache))
+            try:
+                start = time.monotonic()
+                with self._lock:
+                    self._ensure_synth()
+                log.info("Модель синтеза загружена за %.0f с — живые фразы не будут её ждать", time.monotonic() - start)
+            except Exception as exc:  # noqa: BLE001 — не загрузилась, ответим из кэша
+                log.warning("Не удалось заранее загрузить модель синтеза: %s", exc)
 
         thread = threading.Thread(target=_run, name="vosk-tts-warmup", daemon=True)
         thread.start()

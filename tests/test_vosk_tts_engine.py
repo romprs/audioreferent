@@ -59,6 +59,20 @@ def test_synthesize_passes_voice_rate_and_stress_and_caches(tmp_path, monkeypatc
     assert calls2 == []
 
 
+def test_warm_up_loads_the_model_even_when_every_phrase_is_cached(tmp_path, monkeypatch):
+    """Иначе модель загрузится посреди разговора — на первой же живой
+    фразе с фамилией (на рабочей станции это 70 с)."""
+    eng, calls = _engine_with_fake_synth(tmp_path, monkeypatch)
+    eng.synthesize("Слушаю")  # положили в кэш на диске
+    eng2, calls2 = _engine_with_fake_synth(tmp_path, monkeypatch)
+    eng2._synth = None  # как при старте сервиса: модель ещё не загружена
+    loaded = []
+    monkeypatch.setattr(eng2, "_ensure_synth", lambda: loaded.append(True))
+    eng2.warm_up(["Слушаю"]).join(timeout=5)
+    assert eng2._cache["Слушаю"] == b"\x07\x08" * 20  # фраза из кэша, не синтезировали
+    assert loaded == [True]  # но модель всё равно загрузили заранее
+
+
 def test_onnx_threads_restores_the_original_session_class():
     fake_ort = SimpleNamespace(InferenceSession=object, SessionOptions=lambda: SimpleNamespace())
     original = fake_ort.InferenceSession
