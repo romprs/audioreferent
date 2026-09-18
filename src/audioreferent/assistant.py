@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
-from . import actions, feedback, redmail_actions, speaker
+from . import actions, feedback, memory_saver, redmail_actions, speaker
 from .audio import ChunkStream, microphone_stream
 from .signal_level import rms16
 from .commands import CommandRegistry
@@ -50,6 +51,8 @@ class Assistant:
         self._chunks: ChunkStream | None = None
         self._speech_seen = False  # была ли речь (уровень выше порога) в текущей фразе
         self._silence_since: float | None = None  # с какого момента уровень ниже порога
+        self._last_activity = time.monotonic()  # когда последний раз что-то делали
+        self._paged_out = False  # память уже отдана в своп (см. _maybe_page_out)
         # Движок голосового ответа (Piper) — фиксированные фразы
         # синтезируются в фоне, пока грузится всё остальное.
         if config.feedback.speech:
@@ -84,6 +87,26 @@ class Assistant:
             if dropped:
                 log.debug("Сброшено %d чанков аудио, записанных во время ответа", dropped)
         self.recognizer.reset()
+
+    # -- память в простое --------------------------------------------------
+
+    def _note_activity(self) -> None:
+        self._last_activity = time.monotonic()
+        self._paged_out = False
+
+    def _maybe_page_out(self) -> None:
+        """После простоя отдать страницы модели в своп (memory_saver): в
+        покое помощник занимает ~40 МБ вместо ~1,2 ГБ, а на первой команде
+        нужные страницы возвращаются лениво (~1 с). Вытеснение идёт в
+        отдельном потоке — сама операция занимает несколько секунд, и
+        останавливать из-за неё разбор звука незачем."""
+        timeout = self.config.idle_pageout_seconds
+        if not timeout or self._paged_out:
+            return
+        if time.monotonic() - self._last_activity < timeout:
+            return
+        self._paged_out = True  # ставим сразу, чтобы не запускать второй поток
+        threading.Thread(target=memory_saver.page_out, name="pageout", daemon=True).start()
 
     # -- распознавание -----------------------------------------------------
 
@@ -127,13 +150,15 @@ class Assistant:
 
     # -- команды ---------------------------------------------------------
 
-    def _on_wake(self) -> None:
+    def _on_wake(self) -> None:  # noqa: D401 — активация: работа началась
+        self._note_activity()
         log.info("Активационное слово услышано")
         self._beep(drop_echo=False)
 
     def _on_command(self, text: str) -> bool:
         """Выполнить команду. True — действие открыло форму встречи и пора в
         режим заполнения."""
+        self._note_activity()
         log.info("Команда: %r", text)
         match = self.registry.match(text)
         if match is None:
@@ -200,6 +225,7 @@ class Assistant:
             wake_alerted = False
             for chunk in chunks:
                 if state == "idle":
+                    self._maybe_page_out()
                     final = self._accept(chunk)
                     if final:
                         log.info("Распознано (в режиме ожидания активации): %r", final)

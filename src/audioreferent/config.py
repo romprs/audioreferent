@@ -122,6 +122,9 @@ class Config:
     # Порог уровня (RMS PCM16, 0..32767), ниже которого чанк считается
     # тишиной для собственного завершения фразы (0 — не использовать).
     vad_silence_rms: int = 300
+    # Через сколько секунд простоя отдать память модели распознавания в
+    # своп (см. memory_saver.py). 0 — никогда не отдавать.
+    idle_pageout_seconds: float = 300
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":
@@ -149,6 +152,7 @@ class Config:
             recognition_end_silence_seconds=data.get("recognition_end_silence_seconds", 0.4),
             audio_block_samples=int(data.get("audio_block_samples", 4000)),
             vad_silence_rms=int(data.get("vad_silence_rms", 300)),
+            idle_pageout_seconds=float(data.get("idle_pageout_seconds", 300)),
         )
 
 
@@ -242,6 +246,7 @@ def save_config(cfg: Config) -> None:
         "recognition_end_silence_seconds": cfg.recognition_end_silence_seconds,
         "audio_block_samples": cfg.audio_block_samples,
         "vad_silence_rms": cfg.vad_silence_rms,
+        "idle_pageout_seconds": cfg.idle_pageout_seconds,
     }
     # Список команд пишем ТОЛЬКО если он отличается от умолчаний пакета.
     # Иначе каждое «Сохранить» в GUI замораживало бы в пользовательском
