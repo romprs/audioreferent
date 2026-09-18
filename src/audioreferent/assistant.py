@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 
-from . import actions, feedback, memory_saver, redmail_actions, speaker
+from . import actions, feedback, ipc_listener, memory_saver, redmail_actions, speaker
 from .audio import ChunkStream, microphone_stream
 from .signal_level import rms16
 from .commands import CommandRegistry
@@ -59,7 +59,20 @@ class Assistant:
             feedback.configure(config)
             log.info("Голосовой ответ: %s", feedback.engine_name())
 
+        # Канал, по которому напоминание о встрече из почты просит
+        # произнести текст (см. ipc_listener). Не поднялся — помощник
+        # работает как прежде, просто без голосовых напоминаний.
+        self._speak_listener = ipc_listener.SpeakListener(self.speak_external)
+        self._speak_listener.start()
+
     # -- обратная связь -------------------------------------------------
+
+    def speak_external(self, text: str) -> None:
+        """Произнести то, о чём попросили снаружи (напоминание о встрече).
+        Вызывается из потока слушателя канала, поэтому ничего, кроме
+        синтеза и сброса эха, здесь не делаем — состояние разговора не
+        трогаем, чтобы не перебить текущую команду."""
+        self._speak(text, fallback=None)
 
     def _speak(self, text: str, fallback: str | None = "Не удалось выполнить команду") -> None:
         """Озвучить записью и выбросить эхо: пока ответ звучал в колонках,
