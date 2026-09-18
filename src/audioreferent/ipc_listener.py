@@ -33,11 +33,17 @@ MAX_TEXT_CHARS = 300
 
 
 def socket_path() -> Path:
+    """Каталог сеанса ($XDG_RUNTIME_DIR, права 0700) — обычное место для
+    таких сокетов. Если его нет, кладём в СВОЙ каталог внутри /tmp с
+    правами 0700: сам /tmp доступен всем на запись, и сокет в его корне
+    мог бы дёргать любой другой пользователь машины."""
     override = os.environ.get(SOCKET_ENV)
     if override:
         return Path(override)
     runtime = os.environ.get("XDG_RUNTIME_DIR")
-    return Path(runtime if runtime else "/tmp") / SOCKET_NAME
+    if runtime:
+        return Path(runtime) / SOCKET_NAME
+    return Path("/tmp") / f"audioreferent-{os.getuid()}" / SOCKET_NAME
 
 
 class SpeakListener:
@@ -56,13 +62,19 @@ class SpeakListener:
 
     def start(self) -> bool:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            if self._path.exists():
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if self._path.is_socket() or self._path.exists():
                 self._path.unlink()  # сокет прошлого запуска, слушать его некому
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            server.bind(str(self._path))
-            # Только владелец: напоминания — это темы встреч, чужим в сокете
-            # делать нечего даже на общей машине.
+            # Права ставим МАСКОЙ до bind, а не chmod после: между bind и
+            # chmod сокет существовал бы с правами по umask, и в этот
+            # промежуток к нему мог подключиться посторонний. Темы встреч
+            # чужим слышать незачем.
+            previous_umask = os.umask(0o177)
+            try:
+                server.bind(str(self._path))
+            finally:
+                os.umask(previous_umask)
             os.chmod(self._path, 0o600)
             # Очередь с запасом: несколько напоминаний могут прийти подряд,
             # а переполненная очередь даёт просящему EAGAIN вместо доставки.
